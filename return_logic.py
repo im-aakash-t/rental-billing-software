@@ -1,4 +1,4 @@
-# return_logic.py - REFINED VERSION (Fixed Past Due Cross-Collateralization)
+# return_logic.py - REFINED VERSION (Fixed Past Due Cross-Collateralization & Blank Saving)
 import os
 import sqlite3
 import logging
@@ -150,8 +150,6 @@ def get_total_past_dues(db, phone, current_rental_id):
         conn = db.get_connection()
         c = conn.cursor()
         
-        # --- FIX: Only calculate past due from CLOSED returns. ---
-        # Never add active rental balances to past due, because active advances show as negative balance!
         query_closed = """
             SELECT COALESCE(SUM(ret.balance), 0)
             FROM returns ret
@@ -166,7 +164,7 @@ def get_total_past_dues(db, phone, current_rental_id):
         c.execute(query_closed, params_closed)
         closed_debt = safe_float(c.fetchone()[0])
         
-        return closed_debt # Perfectly isolated historical debt.
+        return closed_debt
     except Exception as e:
         return 0.0
 
@@ -194,6 +192,15 @@ def calculate_rental_days(start_date, start_time, return_date, return_time):
 
 def save_return_data(db, rental_id, return_date, return_time, rental_days, due_amount, deduction, damage, balance, amount_paid, returned_items, returned_quantities, payment_mode, refund=0):
     try:
+        # CRITICAL FIX: Cast ALL inputs to floats so SQLite never silently rejects empty blank boxes
+        due_amount = safe_float(due_amount)
+        deduction = safe_float(deduction)
+        damage = safe_float(damage)
+        balance = safe_float(balance)
+        amount_paid = safe_float(amount_paid)
+        refund = safe_float(refund)
+        rental_days = safe_int(rental_days)
+
         conn = db.get_connection()
         c = conn.cursor()
         c.execute("SELECT id FROM returns WHERE rental_id = ?", (rental_id,))

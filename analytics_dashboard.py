@@ -147,6 +147,8 @@ class AnalyticsDashboard:
         return {
             'pending_quantity': pending_quantity,
             'pending_payments': unpaid_returns + unpaid_active,
+            'pending_payments_returned': unpaid_returns,
+            'pending_payments_active': unpaid_active,
             'refund_to_be_done': refund_returns + refund_active
         }
 
@@ -263,8 +265,6 @@ class AnalyticsDashboard:
         return stock_data
 
     def get_top_customers(self, start_str, end_str, limit=10):
-        from shared_imports import calculate_master_balance, calculate_rental_days_unified
-
         conn = self.db.get_connection()
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
@@ -279,18 +279,67 @@ class AnalyticsDashboard:
             except: return datetime.min
 
         customer_stats = {} 
-        c.execute("SELECT date, time, name, phone, total FROM rentals WHERE (cancelled IS NULL OR cancelled = 0)")
+        
+        # Safe check to see if the refund column exists in the returns table
+        has_refund = False
+        try:
+            c.execute("SELECT refund FROM returns LIMIT 1")
+            has_refund = True
+        except:
+            pass
+            
+        # Dynamically build the query based on column availability
+        if has_refund:
+            query = """
+                SELECT r.id, r.date, r.time, r.name, r.phone, r.advance,
+                       (SELECT SUM(amount) FROM installments WHERE rental_id = r.id) as inst_paid,
+                       ret.amount_paid as ret_paid,
+                       ret.refund as ret_refund
+                FROM rentals r
+                LEFT JOIN returns ret ON r.id = ret.rental_id
+                WHERE (r.cancelled IS NULL OR r.cancelled = 0)
+            """
+        else:
+            query = """
+                SELECT r.id, r.date, r.time, r.name, r.phone, r.advance,
+                       (SELECT SUM(amount) FROM installments WHERE rental_id = r.id) as inst_paid,
+                       ret.amount_paid as ret_paid,
+                       0 as ret_refund
+                FROM rentals r
+                LEFT JOIN returns ret ON r.id = ret.rental_id
+                WHERE (r.cancelled IS NULL OR r.cancelled = 0)
+            """
+            
+        c.execute(query)
+        
         for r in c.fetchall():
             if start_dt <= parse_dt(r['date'], r['time']) <= end_dt:
                 phone = r['phone']
-                if phone not in customer_stats: customer_stats[phone] = {'name': r['name'], 'count': 0, 'spent': 0.0}
+                if phone not in customer_stats: 
+                    customer_stats[phone] = {'name': r['name'], 'count': 0, 'spent': 0.0}
+                
                 customer_stats[phone]['count'] += 1
                 
-                try: days = calculate_rental_days_unified(r['date'], r['time'])
-                except: days = 1
-                due_amt, _ = calculate_master_balance(r['total'], days, 0)
-                customer_stats[phone]['spent'] += due_amt
+                advance = safe_float(r['advance'])
+                inst_paid = safe_float(r['inst_paid'])
+                
+                if r['ret_paid'] is not None:
+                    # Rental has been returned
+                    ret_paid = safe_float(r['ret_paid'])
+                    ret_refund = safe_float(r['ret_refund'])
+                    
+                    # 'amount_paid' in DB might include installments, subtract to avoid double-counting
+                    actual_final_payment = max(0.0, ret_paid - inst_paid)
+                    
+                    # Total revenue for this returned rental
+                    total_spent = advance + inst_paid + actual_final_payment - ret_refund
+                else:
+                    # Active rental, just advance and installments count towards spending
+                    total_spent = advance + inst_paid
+                    
+                customer_stats[phone]['spent'] += max(0.0, total_spent)
 
+        # Sort by total spent, highest first
         return sorted([(stats['name'], p, stats['count'], stats['spent']) for p, stats in customer_stats.items()], key=lambda x: x[3], reverse=True)[:limit]
 
     def create_kpi_cards(self, parent):
@@ -306,9 +355,19 @@ class AnalyticsDashboard:
 
         card2 = ttk.Frame(kpi_frame, style='Card.TFrame')
         card2.grid(row=0, column=1, padx=5, sticky="nsew")
-        ttk.Label(card2, text="💰 Pending Payments", font=("Segoe UI", 10, "bold"), foreground="#f44336").pack(pady=(10, 5))
+        
+        card2_header = ttk.Frame(card2)
+        card2_header.pack(fill=tk.X, padx=5, pady=(5, 0))
+        ttk.Label(card2_header, text="💰 Pending Payments", font=("Segoe UI", 10, "bold"), foreground="#f44336").pack(side=tk.LEFT)
+        
+        self.pending_pay_filter = ttk.Combobox(card2_header, values=["All", "Returned", "Not Returned"], state="readonly", width=11, font=("Segoe UI", 8))
+        self.pending_pay_filter.set("All")
+        self.pending_pay_filter.pack(side=tk.RIGHT)
+        
         self.lbl_pending_pay = ttk.Label(card2, text="₹0.00", font=("Segoe UI", 16, "bold"))
-        self.lbl_pending_pay.pack(pady=(0, 10))
+        self.lbl_pending_pay.pack(pady=(5, 10))
+        
+        self.pending_pay_filter.bind("<<ComboboxSelected>>", lambda e: update_kpis())
 
         card3 = ttk.Frame(kpi_frame, style='Card.TFrame')
         card3.grid(row=0, column=2, padx=5, sticky="nsew")
@@ -335,7 +394,16 @@ class AnalyticsDashboard:
         def update_kpis():
             analytics = self.get_pending_analytics()
             self.lbl_pending_qty.config(text=str(analytics['pending_quantity']))
-            self.lbl_pending_pay.config(text=f"₹{analytics['pending_payments']:,.2f}")
+            
+            pay_filter = self.pending_pay_filter.get()
+            if pay_filter == "Returned":
+                pay_amt = analytics['pending_payments_returned']
+            elif pay_filter == "Not Returned":
+                pay_amt = analytics['pending_payments_active']
+            else:
+                pay_amt = analytics['pending_payments']
+                
+            self.lbl_pending_pay.config(text=f"₹{pay_amt:,.2f}")
             self.lbl_pending_refund.config(text=f"₹{analytics['refund_to_be_done']:,.2f}")
             
             clean_date = self.date_var.get().replace("📅 ", "")

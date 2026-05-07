@@ -36,6 +36,12 @@ def create_pending_tab(tab_control, db):
     ttk.Radiobutton(top_frame, text="All", variable=filter_var, value="all", style="Filter.TRadiobutton").pack(side="left", padx=5)
     ttk.Radiobutton(top_frame, text="🔴 To Collect (Debt)", variable=filter_var, value="collect", style="Filter.TRadiobutton").pack(side="left", padx=5)
     ttk.Radiobutton(top_frame, text="🟢 To Refund", variable=filter_var, value="refund", style="Filter.TRadiobutton").pack(side="left", padx=5)
+    
+    return_status_var = tk.StringVar(value="all")
+    ttk.Label(top_frame, text=" |  Status:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(10, 5))
+    ttk.Radiobutton(top_frame, text="All", variable=return_status_var, value="all", style="Filter.TRadiobutton").pack(side="left", padx=5)
+    ttk.Radiobutton(top_frame, text="Returned", variable=return_status_var, value="returned", style="Filter.TRadiobutton").pack(side="left", padx=5)
+    ttk.Radiobutton(top_frame, text="Not Returned", variable=return_status_var, value="not_returned", style="Filter.TRadiobutton").pack(side="left", padx=5)
 
     def print_pending_list():
         if not tree.get_children():
@@ -104,6 +110,7 @@ def create_pending_tab(tab_control, db):
 
         keyword = search_var.get().lower().strip()
         current_filter = filter_var.get()
+        current_return_status = return_status_var.get()
         
         tree.delete(*tree.get_children())
         conn = db.get_connection()
@@ -140,7 +147,7 @@ def create_pending_tab(tab_control, db):
                 all_data.append({
                     "bill_no": row['bill_no'], "name": row['name'], "phone": row['phone'],
                     "date": row['date'], "due_amount": due, "advance": safe_float(row['advance']),
-                    "amount_paid": total_paid, "balance": net_balance
+                    "amount_paid": total_paid, "balance": net_balance, "is_returned": True
                 })
 
         # 2. Active Rentals -> Calculate true live balance
@@ -166,7 +173,7 @@ def create_pending_tab(tab_control, db):
                 all_data.append({
                     "bill_no": row['bill_no'], "name": row['name'], "phone": row['phone'],
                     "date": row['date'], "due_amount": due, "advance": safe_float(row['advance']),
-                    "amount_paid": safe_float(row['inst_paid']), "balance": net_balance
+                    "amount_paid": safe_float(row['inst_paid']), "balance": net_balance, "is_returned": False
                 })
 
         # Sort globally
@@ -182,6 +189,12 @@ def create_pending_tab(tab_control, db):
                 continue
             if current_filter == "refund" and row["balance"] > 0:
                 continue
+                
+            # Apply Return Status Filter
+            if current_return_status == "returned" and not row["is_returned"]:
+                continue
+            if current_return_status == "not_returned" and row["is_returned"]:
+                continue
             
             tag = "debt" if row["balance"] > 0 else "refund"
             tree.insert("", "end", values=(
@@ -193,6 +206,7 @@ def create_pending_tab(tab_control, db):
     # Bind variables to trigger table reload on change
     search_var.trace_add("write", load_pending_data)
     filter_var.trace_add("write", load_pending_data)
+    return_status_var.trace_add("write", load_pending_data)
     
     load_pending_data()
     callbacks.pending_reload_table = load_pending_data

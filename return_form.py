@@ -1,4 +1,4 @@
-# return_form.py - REFINED VERSION (Original Layout + Shortened Table)
+# return_form.py - FIXED VERSION (Restored Paid Lock, Restored Missing Field Loads, Fixed Freeze)
 from tkinter import Frame, ttk, StringVar, BooleanVar, messagebox
 import tkinter as tk
 from datetime import datetime
@@ -116,9 +116,8 @@ def create_return_form(parent, db):
     current_phone = None
     balance_entry_widget = None
 
-    # --- RESTORED ORIGINAL LAYOUT (Stacked) ---
     main_left_frame = ttk.Frame(frame)
-    main_left_frame.grid(row=0, column=0, sticky="nw", padx=(0, 10), pady=2, rowspan=2) # Spans 2 rows so right side stacks
+    main_left_frame.grid(row=0, column=0, sticky="nw", padx=(0, 10), pady=2, rowspan=2)
 
     returned_qty_frame = ttk.LabelFrame(frame, text="Return Quantities", padding=2)
     returned_qty_frame.grid(row=0, column=1, sticky="nw", pady=2)
@@ -141,7 +140,6 @@ def create_return_form(parent, db):
         spinbox_vars.append(var)
         spinboxes.append(sp)
 
-    # --- THE FIX: Height dramatically reduced to 2 ---
     history_tree = ttk.Treeview(payment_history_frame, columns=("Date", "Amount", "Mode", "Cashier"), show="headings", height=2)
     history_tree.heading("Date", text="Date & Time")
     history_tree.heading("Amount", text="Amount")
@@ -221,6 +219,8 @@ def create_return_form(parent, db):
 
     for label, field_key, row, col in field_layout:
         ttk.Label(main_left_frame, text=label, font=HEADER_FONT).grid(row=row, column=col, sticky="e", padx=PAD_X, pady=PAD_Y)
+        
+        # RESTORED FIX: amount_paid is locked back to readonly to force popup usage
         state = "readonly" if field_key in ["rental_days", "due", "advance", "balance", "past_due", "amount_paid"] else "normal"
 
         if field_key == "payment_mode":
@@ -238,6 +238,7 @@ def create_return_form(parent, db):
             entry.pack(side="left")
             widget_refs['add_payment_btn'] = ttk.Button(amt_frame, text="➕", width=3, command=lambda: open_payment_popup(frame))
             widget_refs['add_payment_btn'].pack(side="left", padx=(4,0))
+            widget_refs[field_key] = entry
         else:
             entry = ttk.Entry(main_left_frame, textvariable=fields[field_key], width=12, state=state, font=FORM_FONT)
             entry.grid(row=row, column=col+1, sticky="w", padx=PAD_X, pady=PAD_Y)
@@ -266,14 +267,19 @@ def create_return_form(parent, db):
     def set_return_form_state(state):
         nonlocal calculation_frozen
         calculation_frozen = (state == 'disabled')
+        # Amount paid is not in this list so the field stays readonly naturally, 
+        # but we freeze the rest of the actual form entry boxes
         for k in ["date", "time", "damage", "deduction", "refund"]:
             if k in widget_refs: widget_refs[k].configure(state=state)
+        
         widget_refs['pm_radio1'].configure(state=state)
         widget_refs['pm_radio2'].configure(state=state)
-        widget_refs['add_payment_btn'].configure(state=state)
+        if 'add_payment_btn' in widget_refs: widget_refs['add_payment_btn'].configure(state=state)
+        
         for sp in spinboxes: sp.config(state=state)
         submit_btn.configure(state=state)
         split_btn.configure(state=state)
+        
         if state == 'disabled': edit_btn.grid()
         else:
             edit_btn.grid_remove()
@@ -388,8 +394,15 @@ def create_return_form(parent, db):
     def on_split_bill():
         rental_id = fields["rental_id"].get()
         if not rental_id: return
+        
         qty_to_return = []
-        for i in range(5): qty_to_return.append(safe_int(spinbox_vars[i].get()))
+        spin_idx = 0
+        for qty in rented_quantities_ref:
+            if safe_int(qty) > 0 and spin_idx < 5:
+                qty_to_return.append(safe_int(spinbox_vars[spin_idx].get()))
+                spin_idx += 1
+            else:
+                qty_to_return.append(0)
             
         if all(q == 0 for q in qty_to_return):
             messagebox.showwarning("Split Error", "You haven't marked any items as returned.")
@@ -431,7 +444,8 @@ def create_return_form(parent, db):
                 rental_days=fields["rental_days"].get(),
                 return_date=fields["date"].get(), return_time=fields["time"].get(),
                 background_path=image_path, vehicle=record.get("vehicle", ""),
-                name=record.get("name", "")
+                name=record.get("name", ""),
+                payment_mode=fields["payment_mode"].get()
             )
         except Exception as e: messagebox.showerror("Print Error", f"Failed: {e}")
 
@@ -504,11 +518,27 @@ def create_return_form(parent, db):
                     s = str(prev_return["returned_quantities"]).replace('[','').replace(']','').replace("'",'').replace('"','')
                     saved_returned_qtys = [safe_int(q) for q in s.split(",") if q.strip()]
                 
-                fields["date"].set(prev_return.get("return_date", ""))
-                fields["time"].set(prev_return.get("return_time", ""))
+                all_returned = True
+                for sq, rq in zip(saved_returned_qtys + [0]*10, rental["quantities"] + [0]*10):
+                    if safe_int(sq) < safe_int(rq):
+                        all_returned = False
+                        break
+                        
+                if all_returned:
+                    fields["date"].set(prev_return.get("return_date", ""))
+                    fields["time"].set(prev_return.get("return_time", ""))
+                else:
+                    fields["date"].set(datetime.now().strftime("%d-%m-%y"))
+                    fields["time"].set(datetime.now().strftime("%I:%M %p"))
+                
                 fields["rental_days"].set(str(prev_return.get("rental_days", 1)))
                 fields["due"].set(f"{safe_float(prev_return.get('due_amount', 0)):.2f}")
                 
+                # --- FIXED: LOAD THE MISSING FIELDS ---
+                fields["damage"].set(f"{safe_float(prev_return.get('damage', 0)):.2f}")
+                fields["deduction"].set(f"{safe_float(prev_return.get('deduction', 0)):.2f}")
+                # --------------------------------------
+
                 db_paid = safe_float(prev_return.get('amount_paid', 0))
                 fields["amount_paid"].set(f"{max(db_paid, total_inst):.2f}")
                 
@@ -528,21 +558,25 @@ def create_return_form(parent, db):
                 if spin_idx >= 5: break
                 
                 machine_name_labels[spin_idx].config(text=f"{machine} (Max: {qty})")
-                default_val = saved_returned_qtys[spin_idx] if spin_idx < len(saved_returned_qtys) else 0
+                
+                default_val = saved_returned_qtys[i] if i < len(saved_returned_qtys) else 0
                 
                 spinboxes[spin_idx].config(to=safe_int(qty))
                 spinbox_vars[spin_idx].set(str(default_val))
                 spin_idx += 1
-            
-            if check_if_fully_returned() and abs(safe_float(fields["balance"].get())) < 0.01:
-                 set_return_form_state('disabled')
-            else:
-                 set_return_form_state('normal')
 
         except Exception as e: log_error("Update return fields", e)
         
         loading = False
         if not calculation_frozen: recalc_due()
         else: recalc_balance_only()
+
+        # FIXED: Move freeze logic here AFTER everything calculates correctly
+        try:
+            if check_if_fully_returned() and abs(safe_float(fields["balance"].get())) < 0.01:
+                set_return_form_state('disabled')
+            else:
+                set_return_form_state('normal')
+        except: pass
 
     return {"frame": frame, "update_return_fields_from_selection": update_return_fields_from_selection}

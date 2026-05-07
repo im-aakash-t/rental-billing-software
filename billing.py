@@ -245,7 +245,7 @@ def get_record_by_id(identifier, db):
 
 def generate_bill(bill_no, date, time, address, phone, items, qty, rent, total, advance, 
                   rental_days=1, background_path="bill-layout.jpg", output_pdf=None,
-                  return_date=None, return_time=None, vehicle="", name=""): # <--- ADDED name=""
+                  return_date=None, return_time=None, vehicle="", name="", payment_mode=""):
     """Generate bill PDF with perfectly aligned coordinates."""
     try:
         if output_pdf is None:
@@ -309,8 +309,13 @@ def generate_bill(bill_no, date, time, address, phone, items, qty, rent, total, 
             y -= 25 # Spacing between rows
 
         # --- TOTALS ALIGNMENT ---
-        c.drawString(420, y - 20, f"{int(safe_float(total))}")   # Total
-        c.drawString(480, y - 20, f"{int(safe_float(advance))}") # Advance
+        c.drawString(410, y - 20, f"Rs.{int(safe_float(total))}")   # Total
+        c.drawString(480, y - 20, f"Rs.{int(safe_float(advance))}") # Advance
+        
+        if payment_mode:
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(480, y - 5, f"{str(payment_mode).upper()}:")
+            c.setFont("Helvetica", 12)
 
         # --- RETURN DATES ALIGNMENT ---
         if return_date and return_time:
@@ -375,6 +380,7 @@ def print_bill_from_record(record, db_conn=None):
 
         total = safe_float(record.get("total", "0"))
         advance = record.get("advance", "0")
+        payment_mode = record.get("payment_mode", "Cash")
 
         generate_bill(
             bill_no, date, time, address, phone, 
@@ -384,7 +390,8 @@ def print_bill_from_record(record, db_conn=None):
             total=total, 
             advance=advance,
             vehicle=vehicle,
-            name=name # <--- PASS NAME
+            name=name, # <--- PASS NAME
+            payment_mode=payment_mode
         )
 
     except Exception as e:

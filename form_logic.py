@@ -294,7 +294,8 @@ def print_bill(table, db, current_vars=None, image_path="bill-layout.jpg"):
             total=safe_float(record.get("total", "0")), 
             advance=safe_float(record.get("advance", "0")), 
             rental_days=1, background_path=image_path, vehicle=record.get("vehicle", ""),
-            name=record.get("name", "")
+            name=record.get("name", ""),
+            payment_mode=record.get("payment_mode", "Cash")
         )
         return True
     except Exception as e:

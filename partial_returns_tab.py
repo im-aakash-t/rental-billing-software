@@ -1,4 +1,4 @@
-# partial_returns_tab.py - REFINED VERSION (With Search & Print PDF)
+# partial_returns_tab.py - REFINED VERSION (With Search & Print PDF + Machine Name Search)
 import tkinter as tk
 from tkinter import ttk, messagebox
 import textwrap 
@@ -237,7 +237,12 @@ def create_partial_returns_tab(tab_control, db, update_return_fields_from_select
             for rec in records:
                 # Add phone2 safely to search string
                 phone2 = rec.get("phone2") or ""
-                search_string = f"{rec['bill_no']} {rec['name']} {rec['phone']} {phone2} {rec['address']}".lower()
+                
+                # ---> NEW: Extract all machine names for this customer <---
+                item_names = " ".join([item["name"] for item in rec.get("items_data", [])])
+                
+                # ---> NEW: Added item_names to the search string <---
+                search_string = f"{rec['bill_no']} {rec['name']} {rec['phone']} {phone2} {rec['address']} {item_names}".lower()
                 
                 # Apply filter!
                 if keyword and keyword not in search_string:
