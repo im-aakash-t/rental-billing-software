@@ -6,7 +6,8 @@ from return_logic import (
     get_full_rental_details, save_return_data,
     generate_return_pdf, should_freeze_return_fields,
     get_total_past_dues, split_rental_bill,
-    save_installment, get_installments 
+    save_installment, get_installments,
+    save_refund_history, get_refunds
 )
 from billing import generate_bill, get_record_by_id
 from materials import get_material_by_code
@@ -122,9 +123,9 @@ def create_return_form(parent, db):
     returned_qty_frame = ttk.LabelFrame(frame, text="Return Quantities", padding=2)
     returned_qty_frame.grid(row=0, column=1, sticky="nw", pady=2)
 
-    payment_history_frame = ttk.LabelFrame(frame, text="Payment History", padding=2)
+    payment_history_frame = ttk.LabelFrame(frame, padding=2)
     payment_history_frame.grid(row=1, column=1, sticky="nsew", pady=2)
-
+    
     machine_name_labels = []
     spinbox_vars = []
     spinboxes = []
@@ -139,8 +140,20 @@ def create_return_form(parent, db):
         machine_name_labels.append(lbl)
         spinbox_vars.append(var)
         spinboxes.append(sp)
+    
+    title_frame = ttk.Frame(payment_history_frame)
+    payment_history_frame.configure(labelwidget=title_frame)
+    ttk.Label(title_frame, text="Payment History", font=("Segoe UI", 11, "bold"), foreground="#2176ff").pack(side="left", padx=(0, 20))
+    
+    history_mode_var = StringVar(value="Refund")
+    ttk.Radiobutton(title_frame, text="Refund", variable=history_mode_var, value="Refund", command=lambda: update_history_view()).pack(side="left", padx=5)
+    ttk.Radiobutton(title_frame, text="Paid", variable=history_mode_var, value="Paid", command=lambda: update_history_view()).pack(side="left", padx=5)
+    ttk.Radiobutton(title_frame, text="Return", variable=history_mode_var, value="Return", command=lambda: update_history_view()).pack(side="left", padx=5)
+    
+    history_tree_container = ttk.Frame(payment_history_frame)
+    history_tree_container.pack(side="top", fill="both", expand=True)
 
-    history_tree = ttk.Treeview(payment_history_frame, columns=("Date", "Amount", "Mode", "Cashier"), show="headings", height=2)
+    history_tree = ttk.Treeview(history_tree_container, columns=("Date", "Amount", "Mode", "Cashier"), show="headings", height=2)
     history_tree.heading("Date", text="Date & Time")
     history_tree.heading("Amount", text="Amount")
     history_tree.heading("Mode", text="Mode")
@@ -149,10 +162,65 @@ def create_return_form(parent, db):
     history_tree.column("Amount", width=80, anchor="e")
     history_tree.column("Mode", width=70, anchor="center")
     history_tree.column("Cashier", width=100)
-    history_scroll = ttk.Scrollbar(payment_history_frame, orient="vertical", command=history_tree.yview)
+    history_scroll = ttk.Scrollbar(history_tree_container, orient="vertical", command=history_tree.yview)
     history_tree.configure(yscrollcommand=history_scroll.set)
     history_tree.pack(side="left", fill="both", expand=True)
     history_scroll.pack(side="right", fill="y")
+    
+    current_installments = []
+    current_refunds = []
+    current_returns = []
+
+    def update_history_view():
+        for item in history_tree.get_children(): history_tree.delete(item)
+        if history_mode_var.get() == "Paid":
+            for inst in current_installments:
+                history_tree.insert("", "end", values=(
+                    inst['date_time'], f"{safe_float(inst['amount']):.2f}", 
+                    inst.get('payment_mode', 'Cash'), inst.get('cashier_name', 'Unknown')
+                ))
+        elif history_mode_var.get() == "Refund":
+            for ref in current_refunds:
+                history_tree.insert("", "end", values=(
+                    ref['date_time'], f"{safe_float(ref['amount']):.2f}", 
+                    ref.get('payment_mode', 'Cash'), ref.get('cashier_name', 'Unknown')
+                ))
+        elif history_mode_var.get() == "Return":
+            for ret in current_returns:
+                history_tree.insert("", "end", values=(
+                    ret['date_time'], "-", "-", ret.get('cashier_name', 'Unknown')
+                ))
+
+    def ask_cashier_name(parent_widget, title, action_name, callback):
+        popup = tk.Toplevel(parent_widget)
+        popup.title(title)
+        popup.geometry("380x200") 
+        popup.resizable(False, False)
+        popup.transient(parent_widget)
+        popup.grab_set()
+
+        popup.update_idletasks()
+        x = parent_widget.winfo_rootx() + (parent_widget.winfo_width() // 2) - 190
+        y = parent_widget.winfo_rooty() + (parent_widget.winfo_height() // 2) - 100
+        popup.geometry(f"+{x}+{y}")
+
+        ttk.Label(popup, text="Cashier Name:*", font=HEADER_FONT).pack(pady=(20, 5))
+        cashier_var = StringVar()
+        entry = ttk.Entry(popup, textvariable=cashier_var, font=FORM_FONT, justify="center")
+        entry.pack(pady=5, ipady=4)
+        entry.focus_set()
+
+        def on_confirm():
+            cashier_name = cashier_var.get().strip()
+            if not cashier_name:
+                messagebox.showwarning("Warning", "Cashier Name is required.", parent=popup)
+                return
+            popup.destroy()
+            callback(cashier_name)
+
+        entry.bind("<Return>", lambda e: on_confirm())
+
+        ttk.Button(popup, text=action_name, command=on_confirm, style="Ret.TButton").pack(pady=15)
 
     def open_payment_popup(parent_widget):
         if not fields["rental_id"].get():
@@ -192,21 +260,74 @@ def create_return_form(parent, db):
                 payment_mode = fields["payment_mode"].get()
                 
                 save_installment(db, int(rental_id), amt, payment_mode, cashier_name, date_str)
-                history_tree.insert("", "end", values=(date_str, f"{amt:.2f}", payment_mode, cashier_name))
                 
                 current_paid = safe_float(fields["amount_paid"].get())
                 fields["amount_paid"].set(f"{current_paid + amt:.2f}")
                 
-                conn = db.get_connection()
-                if conn.cursor().execute("SELECT id FROM returns WHERE rental_id=?", (rental_id,)).fetchone():
-                    on_submit(silent=True)
-                else:
-                    recalc_due() 
+                on_submit(silent=True, cashier_name=cashier_name)
+                try:
+                    update_return_fields_from_selection(db, int(rental_id))
+                except Exception as e:
+                    print(f"[WARN] Failed to refresh return fields: {e}")
                     
                 popup.destroy()
             except Exception as e: messagebox.showerror("Error", f"Invalid input: {e}")
 
         ttk.Button(popup, text="Add Payment", command=add_payment, style="Ret.TButton").pack(pady=20)
+
+    def open_refund_popup(parent_widget):
+        if not fields["rental_id"].get():
+            messagebox.showwarning("Error", "Please select a rental record first.")
+            return
+
+        popup = tk.Toplevel(parent_widget)
+        popup.title("Add Refund")
+        popup.geometry("380x280") 
+        popup.resizable(False, False)
+        popup.transient(parent_widget)
+        popup.grab_set()
+
+        popup.update_idletasks()
+        x = parent_widget.winfo_rootx() + (parent_widget.winfo_width() // 2) - 190
+        y = parent_widget.winfo_rooty() + (parent_widget.winfo_height() // 2) - 140
+        popup.geometry(f"+{x}+{y}")
+
+        ttk.Label(popup, text="Refund Amount (₹):", font=HEADER_FONT).pack(pady=(20, 5))
+        amt_var = StringVar(value="") 
+        ttk.Entry(popup, textvariable=amt_var, font=FORM_FONT, justify="center").pack(pady=5, ipady=4)
+        
+        ttk.Label(popup, text="Cashier Name:*", font=HEADER_FONT).pack(pady=(10, 5))
+        cashier_var = StringVar()
+        ttk.Entry(popup, textvariable=cashier_var, font=FORM_FONT, justify="center").pack(pady=5, ipady=4)
+
+        def add_refund():
+            try:
+                amt_str = amt_var.get().strip()
+                if not amt_str: return
+                amt = safe_float(amt_str)
+                if amt <= 0: return
+                cashier_name = cashier_var.get().strip()
+                if not cashier_name: return
+                
+                rental_id = fields["rental_id"].get()
+                date_str = datetime.now().strftime("%d-%m-%y %I:%M %p")
+                payment_mode = fields["payment_mode"].get()
+                
+                save_refund_history(db, int(rental_id), amt, cashier_name, payment_mode, date_str)
+                
+                current_refund = safe_float(fields["refund"].get())
+                fields["refund"].set(f"{current_refund + amt:.2f}")
+                
+                on_submit(silent=True, cashier_name=cashier_name)
+                try:
+                    update_return_fields_from_selection(db, int(rental_id))
+                except Exception as e:
+                    print(f"[WARN] Failed to refresh return fields: {e}")
+                    
+                popup.destroy()
+            except Exception as e: messagebox.showerror("Error", f"Invalid input: {e}")
+
+        ttk.Button(popup, text="Add Refund", command=add_refund, style="Ret.TButton").pack(pady=20)
 
     field_layout = [
         ("Return Date:", "date", 0, 0), ("Return Time:", "time", 1, 0), ("Rental Days:", "rental_days", 2, 0),
@@ -221,7 +342,7 @@ def create_return_form(parent, db):
         ttk.Label(main_left_frame, text=label, font=HEADER_FONT).grid(row=row, column=col, sticky="e", padx=PAD_X, pady=PAD_Y)
         
         # RESTORED FIX: amount_paid is locked back to readonly to force popup usage
-        state = "readonly" if field_key in ["rental_days", "due", "advance", "balance", "past_due", "amount_paid"] else "normal"
+        state = "readonly" if field_key in ["rental_days", "due", "advance", "balance", "past_due", "amount_paid", "refund"] else "normal"
 
         if field_key == "payment_mode":
             payment_frame = ttk.Frame(main_left_frame)
@@ -231,23 +352,29 @@ def create_return_form(parent, db):
             widget_refs['pm_radio1'].pack(side="left", padx=2)
             widget_refs['pm_radio2'] = ttk.Radiobutton(payment_frame, text="UPI", variable=fields["payment_mode"], value="UPI", style="Big.TRadiobutton")
             widget_refs['pm_radio2'].pack(side="left", padx=2)
-        elif field_key == "amount_paid":
+        elif field_key in ["amount_paid", "refund"]:
             amt_frame = ttk.Frame(main_left_frame)
             amt_frame.grid(row=row, column=col+1, sticky="w", padx=PAD_X, pady=PAD_Y)
             entry = ttk.Entry(amt_frame, textvariable=fields[field_key], width=8, state=state, font=FORM_FONT)
+            if field_key == "refund": entry.configure(foreground="purple")
             entry.pack(side="left")
-            widget_refs['add_payment_btn'] = ttk.Button(amt_frame, text="➕", width=3, command=lambda: open_payment_popup(frame))
-            widget_refs['add_payment_btn'].pack(side="left", padx=(4,0))
+            
+            if field_key == "amount_paid":
+                btn = ttk.Button(amt_frame, text="➕", width=3, command=lambda: open_payment_popup(frame))
+                widget_refs['add_payment_btn'] = btn
+            else:
+                btn = ttk.Button(amt_frame, text="➕", width=3, command=lambda: open_refund_popup(frame))
+                widget_refs['add_refund_btn'] = btn
+            btn.pack(side="left", padx=(4,0))
             widget_refs[field_key] = entry
         else:
             entry = ttk.Entry(main_left_frame, textvariable=fields[field_key], width=12, state=state, font=FORM_FONT)
             entry.grid(row=row, column=col+1, sticky="w", padx=PAD_X, pady=PAD_Y)
             if field_key == "past_due": entry.configure(foreground="red")
-            if field_key == "refund": entry.configure(foreground="purple")
             if field_key == "balance": 
                 entry.configure(font=("Segoe UI", 11, "bold"))
                 balance_entry_widget = entry
-            if field_key in ["date", "time", "damage", "deduction", "refund"]:
+            if field_key in ["date", "time", "damage", "deduction"]:
                 widget_refs[field_key] = entry
 
     edit_btn = ttk.Button(main_left_frame, text="✏️ Edit Return (Unfreeze)", command=lambda: set_return_form_state('normal'), style="Ret.TButton")
@@ -257,7 +384,14 @@ def create_return_form(parent, db):
     button_frame = ttk.Frame(main_left_frame)
     button_frame.grid(row=7, column=0, columnspan=4, pady=(5, 0), sticky="w", padx=PAD_X) 
     
-    submit_btn = ttk.Button(button_frame, text="Submit Return", style="Ret.TButton", command=lambda: on_submit())
+    def on_submit_click():
+        rental_id = fields["rental_id"].get()
+        if not rental_id: return
+        def proceed(cashier_name):
+            on_submit(silent=False, cashier_name=cashier_name)
+        ask_cashier_name(frame, "Submit Return", "Submit Return", proceed)
+
+    submit_btn = ttk.Button(button_frame, text="Submit Return", style="Ret.TButton", command=on_submit_click)
     submit_btn.pack(side="left", padx=5)
     ttk.Button(button_frame, text="📄 Estimate", style="Ret.TButton", command=lambda: on_print_bill("Estimate-Bill.png")).pack(side="left", padx=5)
     ttk.Button(button_frame, text="🧾 Tax Invoice", style="Ret.TButton", command=lambda: on_print_bill("Tax-Invoice.png")).pack(side="left", padx=5)
@@ -267,14 +401,15 @@ def create_return_form(parent, db):
     def set_return_form_state(state):
         nonlocal calculation_frozen
         calculation_frozen = (state == 'disabled')
-        # Amount paid is not in this list so the field stays readonly naturally, 
+        # Amount paid and refund are not in this list so they stay readonly naturally, 
         # but we freeze the rest of the actual form entry boxes
-        for k in ["date", "time", "damage", "deduction", "refund"]:
+        for k in ["date", "time", "damage", "deduction"]:
             if k in widget_refs: widget_refs[k].configure(state=state)
         
         widget_refs['pm_radio1'].configure(state=state)
         widget_refs['pm_radio2'].configure(state=state)
         if 'add_payment_btn' in widget_refs: widget_refs['add_payment_btn'].configure(state=state)
+        if 'add_refund_btn' in widget_refs: widget_refs['add_refund_btn'].configure(state=state)
         
         for sp in spinboxes: sp.config(state=state)
         submit_btn.configure(state=state)
@@ -298,6 +433,7 @@ def create_return_form(parent, db):
             spinboxes[i].config(from_=0, to=0) 
             spinbox_vars[i].set("0")
         for item in history_tree.get_children(): history_tree.delete(item)
+        current_returns.clear()
         if balance_entry_widget: balance_entry_widget.configure(foreground="black")
 
     def safe_parse_date_time(date_str, time_str):
@@ -410,15 +546,51 @@ def create_return_form(parent, db):
         if check_if_fully_returned():
             messagebox.showwarning("Split Error", "You are returning EVERYTHING. Just click Submit.")
             return
-            
-        if messagebox.askyesno("Confirm Split", "This will keep returned quantities in THIS bill, and move remaining items to a NEW bill.\nProceed?"):
-            try:
-                new_bill_no = split_rental_bill(db, int(rental_id), qty_to_return)
-                messagebox.showinfo("Success", f"Split Successful!\nNew pending bill created: {new_bill_no}")
-                update_return_fields_from_selection(db, int(rental_id))
-                if callbacks.reload_all_tabs: callbacks.reload_all_tabs()
-            except Exception as e:
-                messagebox.showerror("Split Failed", str(e))
+
+        def proceed_split(cashier_name):
+            if messagebox.askyesno("Confirm Split", "This will keep returned quantities in THIS bill, and move remaining items to a NEW bill.\nProceed?"):
+                try:
+                    new_bill_no = split_rental_bill(db, int(rental_id), qty_to_return)
+                    
+                    full_details = get_full_rental_details(db, int(rental_id))
+                    final_returned_qtys = [str(q) for q in qty_to_return if q > 0]
+                    final_returned_items = [str(code) for code in full_details["machine_codes"]]
+                    
+                    rental_days = safe_int(fields["rental_days"].get()) or 1
+                    daily_rent = sum(safe_float(r) for r in full_details["rents"])
+                    
+                    from shared_imports import calculate_master_balance
+                    due, net_balance = calculate_master_balance(
+                        daily_rent=daily_rent,
+                        rental_days=rental_days,
+                        advance_paid=0.0,
+                        installments_paid=safe_float(fields["amount_paid"].get()),
+                        damage_charges=safe_float(fields["damage"].get()),
+                        discount_deduction=safe_float(fields["deduction"].get()),
+                        final_amount_paid=safe_float(fields["amount_paid"].get()),
+                        refund_given=safe_float(fields["refund"].get()),
+                        is_returned=True
+                    )
+                    
+                    save_return_data(
+                        db, rental_id=int(rental_id), return_date=fields["date"].get(), return_time=fields["time"].get(),
+                        rental_days=rental_days, due_amount=due,
+                        deduction=fields["deduction"].get(), damage=fields["damage"].get(),
+                        balance=net_balance, amount_paid=fields["amount_paid"].get(),
+                        refund=fields["refund"].get(),
+                        returned_items=",".join(final_returned_items),
+                        returned_quantities=",".join(final_returned_qtys),
+                        payment_mode=fields["payment_mode"].get(),
+                        cashier_name=cashier_name
+                    )
+                    
+                    messagebox.showinfo("Success", f"Split Successful!\nNew pending bill created: {new_bill_no}")
+                    update_return_fields_from_selection(db, int(rental_id))
+                    if callbacks.reload_all_tabs: callbacks.reload_all_tabs()
+                except Exception as e:
+                    messagebox.showerror("Split Failed", str(e))
+                    
+        ask_cashier_name(frame, "Split & Close", "Split & Close", proceed_split)
 
     def on_print_bill(image_path="bill-layout.jpg"):
         rental_id = fields["rental_id"].get()
@@ -435,21 +607,35 @@ def create_return_form(parent, db):
             clean_qtys = [r[1] for r in items_rows]
             clean_rents = [r[2] for r in items_rows]
 
+            # --- NEW: Calculate the true billing amount ---
+            due_amt = safe_float(fields["due"].get())
+            deduction_amt = safe_float(fields["deduction"].get())
+            damage_amt = safe_float(fields["damage"].get())
+            
+            actual_billing_amount = due_amt - deduction_amt + damage_amt
+            # ----------------------------------------------
+
             bill_no = record.get("bill_no") or record.get("id")
             generate_bill(
                 bill_no=bill_no, date=record.get("date", ""), time=record.get("time", ""),
                 address=record.get("address", ""), phone=record.get("phone", ""),
                 items=clean_items, qty=clean_qtys, rent=clean_rents, 
-                total=fields["due"].get(), advance=record.get("advance", "0"),
+                
+                # --- NEW: Pass the actual_billing_amount instead of fields["balance"].get() ---
+                total=actual_billing_amount, 
+                
+                advance=record.get("advance", "0"),
                 rental_days=fields["rental_days"].get(),
                 return_date=fields["date"].get(), return_time=fields["time"].get(),
                 background_path=image_path, vehicle=record.get("vehicle", ""),
                 name=record.get("name", ""),
-                payment_mode=fields["payment_mode"].get()
+                payment_mode=fields["payment_mode"].get(),
+                deduction=deduction_amt,
+                damage=damage_amt
             )
         except Exception as e: messagebox.showerror("Print Error", f"Failed: {e}")
 
-    def on_submit(silent=False):
+    def on_submit(silent=False, cashier_name=None):
         rental_id = fields["rental_id"].get()
         if not rental_id: return
         try:
@@ -472,12 +658,20 @@ def create_return_form(parent, db):
                 balance=fields["balance"].get(), amount_paid=fields["amount_paid"].get(),
                 refund=fields["refund"].get(), 
                 returned_items=",".join(final_returned_items), returned_quantities=",".join(final_returned_qtys),
-                payment_mode=fields["payment_mode"].get()
+                payment_mode=fields["payment_mode"].get(),
+                cashier_name=cashier_name or ""
             )
             
-            if not silent: messagebox.showinfo("Success", "Return details saved.")
+            if not silent: 
+                messagebox.showinfo("Success", "Return details saved.")
+                update_return_fields_from_selection(db, int(rental_id))
             if check_if_fully_returned() and abs(safe_float(fields["balance"].get())) < 0.01:
                 set_return_form_state('disabled')
+                
+            try:
+                if callbacks.reload_all_tabs: callbacks.reload_all_tabs()
+            except:
+                pass
         except Exception as e:
             if not silent: messagebox.showerror("Error", f"Failed to save: {e}")
 
@@ -497,18 +691,33 @@ def create_return_form(parent, db):
             fields["advance"].set(f"{safe_float(rental.get('advance', 0.0)):.2f}")
 
             installments = get_installments(db, int(rental_id))
+            current_installments.clear()
+            current_installments.extend(installments)
+            
             total_inst = 0.0
             for inst in installments:
                 total_inst += safe_float(inst['amount'])
-                history_tree.insert("", "end", values=(
-                    inst['date_time'], f"{safe_float(inst['amount']):.2f}", 
-                    inst['payment_mode'], inst.get('cashier_name', 'Unknown')
-                ))
+                
+            refunds = get_refunds(db, int(rental_id))
+            current_refunds.clear()
+            current_refunds.extend(refunds)
 
             conn = db.get_connection()
             c = conn.cursor()
             c.execute("SELECT * FROM returns WHERE rental_id = ?", (rental_id,))
             prev_return_row = c.fetchone()
+            
+            current_returns.clear()
+            if prev_return_row:
+                prev_return = dict(prev_return_row)
+                dt = f"{prev_return.get('return_date', '')} {prev_return.get('return_time', '')}".strip()
+                cashier = prev_return.get('cashier_name', '') or 'Unknown'
+                current_returns.append({
+                    'date_time': dt,
+                    'cashier_name': cashier
+                })
+
+            update_history_view()
             
             saved_returned_qtys = []
 

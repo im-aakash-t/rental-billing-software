@@ -176,6 +176,10 @@ def create_pending_tab(tab_control, db):
                     "amount_paid": safe_float(row['inst_paid']), "balance": net_balance, "is_returned": False
                 })
 
+        # Get regular customer phones set
+        from shared_imports import get_regular_customer_phones
+        regular_phones = get_regular_customer_phones(db)
+
         # Sort globally
         all_data.sort(key=lambda x: x["balance"], reverse=True)
         
@@ -196,9 +200,13 @@ def create_pending_tab(tab_control, db):
             if current_return_status == "not_returned" and row["is_returned"]:
                 continue
             
+            cust_name = row["name"]
+            if row["phone"] in regular_phones:
+                cust_name += " ⭐"
+
             tag = "debt" if row["balance"] > 0 else "refund"
             tree.insert("", "end", values=(
-                row["bill_no"], row["name"], row["phone"], row["date"],
+                row["bill_no"], cust_name, row["phone"], row["date"],
                 f"{row['due_amount']:.2f}", f"{row['advance']:.2f}",
                 f"{row['amount_paid']:.2f}", f"{row['balance']:.2f}"
             ), tags=(tag,))

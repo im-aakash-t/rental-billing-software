@@ -232,6 +232,9 @@ def create_partial_returns_tab(tab_control, db, update_return_fields_from_select
         try:
             keyword = search_var.get().strip().lower()
             tree.delete(*tree.get_children())
+            from shared_imports import get_regular_customer_phones
+            regular_phones = get_regular_customer_phones(db)
+            
             records = get_pending_returns(db)
             
             for rec in records:
@@ -251,8 +254,12 @@ def create_partial_returns_tab(tab_control, db, update_return_fields_from_select
                 addr = rec["address"] or ""
                 wrapped_addr = "\n".join(textwrap.wrap(addr, width=45))
                 
+                cust_name = rec["name"]
+                if rec["phone"] in regular_phones:
+                    cust_name += " ⭐"
+
                 parent_id = tree.insert("", "end", values=(
-                    rec["bill_no"], rec["name"], rec["phone"], wrapped_addr,
+                    rec["bill_no"], cust_name, rec["phone"], wrapped_addr,
                     rec["date"], "--- Items Below ---", ""
                 ), tags=("parent",), open=True) 
                 

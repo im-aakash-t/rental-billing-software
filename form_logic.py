@@ -178,6 +178,10 @@ def load_table(search_var, filter_var, from_date_var, to_date_var, from_bill_var
         records = load_all_records(db, limit=limit * 5) 
         view_count = 0
         
+        # Get regular customer phones set
+        from shared_imports import get_regular_customer_phones
+        regular_phones = get_regular_customer_phones(db)
+        
         for rec in sorted(records, key=lambda r: r["id"], reverse=True):
             address_str = str(rec.get("address", "")).lower()
             bill_str = str(rec.get("bill_no", "")).lower()
@@ -205,8 +209,12 @@ def load_table(search_var, filter_var, from_date_var, to_date_var, from_bill_var
             tag = "returned" if live_balance <= 0 and fully_returned else "not_returned"
             icon = "✓" if tag == "returned" else "✗"
             
+            cust_name = rec["name"]
+            if rec["phone"] in regular_phones:
+                cust_name += " ⭐"
+
             table.insert("", "end", values=(
-                rec["bill_no"], rec["name"], rec["phone"], rec.get("phone2", ""),
+                rec["bill_no"], cust_name, rec["phone"], rec.get("phone2", ""),
                 rec.get("address", ""), rec["date"], f"{live_balance:.2f}", pending, icon
             ), tags=(tag,))
             
@@ -236,13 +244,24 @@ def populate_form_from_record(record, field_vars, address_text):
     try:
         for key in ["bill_no", "name", "phone", "phone2", "id_proof", "total", 
                     "advance", "date", "time", "vehicle", "payment_mode"]:
-            field_vars[key].set(record.get(key, ""))
+            val = record.get(key)
+            if val is None: val = ""
+            field_vars[key].set(val)
         
-        field_vars["cashier_name"].set(record.get("cashier_name", ""))
+        cashier_val = record.get("cashier_name")
+        if cashier_val is None: cashier_val = ""
+        field_vars["cashier_name"].set(cashier_val)
         field_vars["mode"].set("edit")
         field_vars["record_id"].set(record["id"])
+        
+        addr_val = record.get("address")
+        if addr_val is None: addr_val = ""
+        
+        old_state = address_text.cget("state")
+        address_text.configure(state=tk.NORMAL)
         address_text.delete("1.0", "end")
-        address_text.insert("1.0", record.get("address", ""))
+        address_text.insert("1.0", addr_val)
+        address_text.configure(state=old_state)
         
         db = field_vars["db"]
         conn = db.get_connection()
@@ -254,9 +273,9 @@ def populate_form_from_record(record, field_vars, address_text):
         for item in items:
             if display_idx >= MAX_MACHINES_PER_BILL: break
             field_vars["machine_codes"][display_idx].set(item[0] or "")
-            field_vars["machine_names"][display_idx].set(item[1])
-            field_vars["quantities"][display_idx].set(str(item[2]))
-            field_vars["rents"][display_idx].set(str(item[3]))
+            field_vars["machine_names"][display_idx].set(item[1] or "")
+            field_vars["quantities"][display_idx].set(str(item[2]) if item[2] is not None else "")
+            field_vars["rents"][display_idx].set(str(item[3]) if item[3] is not None else "")
             display_idx += 1
             
         for i in range(display_idx, MAX_MACHINES_PER_BILL):
@@ -286,6 +305,12 @@ def print_bill(table, db, current_vars=None, image_path="bill-layout.jpg"):
         clean_qtys = [r[1] for r in items_rows]
         clean_rents = [r[2] for r in items_rows]
 
+        # Query deduction and damage if exists in returns table
+        c.execute("SELECT deduction, damage FROM returns WHERE rental_id=?", (record['id'],))
+        ret_row = c.fetchone()
+        deduction = safe_float(ret_row[0]) if ret_row else 0.0
+        damage = safe_float(ret_row[1]) if ret_row else 0.0
+
         from billing import generate_bill
         generate_bill(
             bill_no=record.get("bill_no"), date=record.get("date"), time=record.get("time"),
@@ -295,7 +320,9 @@ def print_bill(table, db, current_vars=None, image_path="bill-layout.jpg"):
             advance=safe_float(record.get("advance", "0")), 
             rental_days=1, background_path=image_path, vehicle=record.get("vehicle", ""),
             name=record.get("name", ""),
-            payment_mode=record.get("payment_mode", "Cash")
+            payment_mode=record.get("payment_mode", "Cash"),
+            deduction=deduction,
+            damage=damage
         )
         return True
     except Exception as e:
@@ -313,10 +340,14 @@ def setup_phone_suggestions(phone_var, name_var, address_text, suggestion_box, d
             conn = db.get_connection()
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
-            c.execute("SELECT name, phone, phone2, address FROM customers WHERE phone LIKE ? ORDER BY name ASC LIMIT 10", (f'%{query}%',))
+            c.execute("SELECT name, phone, phone2, address, is_regular FROM customers WHERE phone LIKE ? ORDER BY name ASC LIMIT 10", (f'%{query}%',))
             matches = [dict(row) for row in c.fetchall()]
             suggestion_box.delete(0, tk.END)
-            for r in matches: suggestion_box.insert(tk.END, f"{r['phone']} - {r['name']}")
+            for r in matches:
+                name_disp = r['name']
+                if r.get('is_regular'):
+                    name_disp += " ⭐"
+                suggestion_box.insert(tk.END, f"{r['phone']} - {name_disp}")
             if matches: suggestion_box.grid()
             else: suggestion_box.grid_remove()
         except Exception as e: suggestion_box.grid_remove()
@@ -369,12 +400,15 @@ def setup_phone2_suggestions(phone2_var, name_var, address_text, suggestion_box,
             conn = db.get_connection()
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
-            c.execute("SELECT name, phone, phone2, address FROM customers WHERE phone LIKE ? OR phone2 LIKE ? ORDER BY name ASC LIMIT 10", (f'%{query}%', f'%{query}%'))
+            c.execute("SELECT name, phone, phone2, address, is_regular FROM customers WHERE phone LIKE ? OR phone2 LIKE ? ORDER BY name ASC LIMIT 10", (f'%{query}%', f'%{query}%'))
             matches = [dict(row) for row in c.fetchall()]
             suggestion_box.delete(0, tk.END)
             for r in matches: 
                 disp_phone = r.get("phone2", "") if query in str(r.get("phone2", "")) else r["phone"]
-                suggestion_box.insert(tk.END, f"{disp_phone} - {r['name']}")
+                name_disp = r['name']
+                if r.get('is_regular'):
+                    name_disp += " ⭐"
+                suggestion_box.insert(tk.END, f"{disp_phone} - {name_disp}")
             if matches: suggestion_box.grid()
             else: suggestion_box.grid_remove()
         except: suggestion_box.grid_remove()

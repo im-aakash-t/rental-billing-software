@@ -63,6 +63,9 @@ def validate_form(data):
     is_valid_phone, phone_error = validate_phone(phone)
     if not is_valid_phone:
         errors.append(phone_error)
+        
+    if not data.get('cashier_name', '').strip():
+        errors.append("Cashier name is required")
     
     machines = [m.strip() for m in data['machines'] if m.strip()]
     if not any(machines):
@@ -245,7 +248,8 @@ def get_record_by_id(identifier, db):
 
 def generate_bill(bill_no, date, time, address, phone, items, qty, rent, total, advance, 
                   rental_days=1, background_path="bill-layout.jpg", output_pdf=None,
-                  return_date=None, return_time=None, vehicle="", name="", payment_mode=""):
+                  return_date=None, return_time=None, vehicle="", name="", payment_mode="",
+                  deduction=0.0, damage=0.0):
     """Generate bill PDF with perfectly aligned coordinates."""
     try:
         if output_pdf is None:
@@ -267,9 +271,27 @@ def generate_bill(bill_no, date, time, address, phone, items, qty, rent, total, 
         c.drawString(450, height - 248, str(time))
 
         # --- NEW: NAME & ADDRESS ALIGNMENT ---
+        # Check if customer is regular to print star symbol near name
+        is_regular = False
+        if phone:
+            try:
+                import sqlite3
+                conn = sqlite3.connect("rentals.db")
+                cur = conn.cursor()
+                cur.execute("SELECT is_regular FROM customers WHERE phone = ?", (str(phone).strip(),))
+                res = cur.fetchone()
+                if res and res[0]:
+                    is_regular = True
+                conn.close()
+            except Exception:
+                pass
+
         address_lines = []
         if name:
-            address_lines.append(str(name)) # Name becomes Line 1
+            name_str = str(name)
+            if is_regular:
+                name_str += " *"
+            address_lines.append(name_str) # Name becomes Line 1
             
         for para in str(address).split('\n'):
             address_lines.extend(textwrap.wrap(para, width=55))
@@ -308,13 +330,23 @@ def generate_bill(bill_no, date, time, address, phone, items, qty, rent, total, 
             c.drawString(360, y, str(int(safe_float(rent[i]))))            # Rent/Amount
             y -= 25 # Spacing between rows
 
-        # --- TOTALS ALIGNMENT ---
-        c.drawString(410, y - 20, f"Rs.{int(safe_float(total))}")   # Total
-        c.drawString(480, y - 20, f"Rs.{int(safe_float(advance))}") # Advance
+        # --- FIXED TOTALS ALIGNMENT ---
+        # Fixed Y coordinate so the totals don't slide down with extra items
+        totals_base_y = height - 485 
+        
+        c.drawString(410, totals_base_y - 20, f"Rs.{int(safe_float(total))}")   # Total
+        c.drawString(480, totals_base_y - 20, f"Rs.{int(safe_float(advance))}") # Advance
+        
+        c.setFont("Helvetica-Bold", 11)
+        if safe_float(deduction) > 0:
+            c.drawString(130, totals_base_y - 100, f"Deduction: Rs.{int(safe_float(deduction))}")
+        if safe_float(damage) > 0:
+            c.drawString(130, totals_base_y - 120, f"Damage Cost: Rs.{int(safe_float(damage))}")
+        c.setFont("Helvetica", 12)
         
         if payment_mode:
             c.setFont("Helvetica-Bold", 10)
-            c.drawString(480, y - 5, f"{str(payment_mode).upper()}:")
+            c.drawString(480, totals_base_y - 5, f"{str(payment_mode).upper()}:")
             c.setFont("Helvetica", 12)
 
         # --- RETURN DATES ALIGNMENT ---
@@ -382,6 +414,19 @@ def print_bill_from_record(record, db_conn=None):
         advance = record.get("advance", "0")
         payment_mode = record.get("payment_mode", "Cash")
 
+        deduction = 0.0
+        damage = 0.0
+        if db_conn:
+            try:
+                c = db_conn.cursor()
+                c.execute("SELECT deduction, damage FROM returns WHERE rental_id = ?", (record['id'],))
+                ret_row = c.fetchone()
+                if ret_row:
+                    deduction = safe_float(ret_row[0])
+                    damage = safe_float(ret_row[1])
+            except Exception as e:
+                print(f"[WARN] Failed to fetch return deduction/damage: {e}")
+
         generate_bill(
             bill_no, date, time, address, phone, 
             items=clean_items, 
@@ -391,7 +436,9 @@ def print_bill_from_record(record, db_conn=None):
             advance=advance,
             vehicle=vehicle,
             name=name, # <--- PASS NAME
-            payment_mode=payment_mode
+            payment_mode=payment_mode,
+            deduction=deduction,
+            damage=damage
         )
 
     except Exception as e:
@@ -463,8 +510,18 @@ def cancel_rental(rental_id, db):
     conn.execute("BEGIN TRANSACTION")
     try:
         c = conn.cursor()
+        # Query phone first to trigger loyalty update
+        c.execute("SELECT phone FROM rentals WHERE id = ?", (rental_id,))
+        res = c.fetchone()
+        phone = res[0] if res else None
+
         c.execute("UPDATE rentals SET cancelled = 1 WHERE id = ?", (rental_id,))
         conn.commit()
+
+        if phone:
+            from shared_imports import sync_customer_from_last_bill
+            sync_customer_from_last_bill(db, phone)
+
         return True
     except Exception as e:
         conn.rollback()

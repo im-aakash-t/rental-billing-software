@@ -381,7 +381,7 @@ def create_form_tab(tab_control, db):
     pm_radio2 = ttk.Radiobutton(pm_frame, text="UPI", variable=payment_mode_var, value="UPI", style="Big.TRadiobutton")
     pm_radio2.pack(side="left", padx=2)
     
-    ttk.Label(summary_right, text="Cashier Name:", font=HEADER_FONT).grid(row=5, column=0, sticky="e", padx=PAD_X, pady=PAD_Y)
+    ttk.Label(summary_right, text="Cashier Name:*", font=HEADER_FONT).grid(row=5, column=0, sticky="e", padx=PAD_X, pady=PAD_Y)
     cashier_entry = ttk.Entry(summary_right, textvariable=cashier_name_var, width=18, font=FORM_FONT, style="Form.TEntry")
     cashier_entry.grid(row=5, column=1, sticky="w", padx=PAD_X, pady=PAD_Y)
 
@@ -488,7 +488,11 @@ def create_form_tab(tab_control, db):
                 cancel_rental(record_id_var.get(), db)
                 messagebox.showinfo("Success", "Rental cancelled.")
                 wrapped_clear_form()
-                load_table()
+                try:
+                    if callbacks.reload_all_tabs: callbacks.reload_all_tabs()
+                    else: load_table()
+                except:
+                    load_table()
             except Exception as e:
                 messagebox.showerror("Error", str(e))
 

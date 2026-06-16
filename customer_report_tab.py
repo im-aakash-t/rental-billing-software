@@ -138,7 +138,8 @@ def create_customer_report_tab(tab_control, db):
             return
         
         try:
-            from return_logic import get_customer_history
+            from shared_imports import get_regular_customer_phones, get_customer_history
+            regular_phones = get_regular_customer_phones(db)
             
             records = get_customer_history(db, keyword)
             total_billed = 0.0
@@ -193,9 +194,13 @@ def create_customer_report_tab(tab_control, db):
                 if bal < 0: tag = "negative"
                 elif bal > 0: tag = "positive"
 
+                cust_name = row.get("name", "")
+                if row.get("phone", "") in regular_phones:
+                    cust_name += " ⭐"
+
                 tree.insert("", "end", values=(
                     row.get("bill_no", ""), # Use bill_no here
-                    row.get("name", ""), 
+                    cust_name, 
                     row.get("phone", ""), 
                     row.get("date", ""),
                     machines_str,

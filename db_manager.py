@@ -81,6 +81,7 @@ class DBManager:
                     returned_quantities TEXT NOT NULL,
                     payment_mode TEXT DEFAULT 'Cash',
                     paid_mode TEXT DEFAULT 'Cash',
+                    cashier_name TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY(rental_id) REFERENCES rentals(id) ON DELETE CASCADE
                 )
@@ -112,6 +113,29 @@ class DBManager:
                 )
             """)
 
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS refunds_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rental_id INTEGER NOT NULL,
+                    amount REAL NOT NULL CHECK(amount > 0),
+                    cashier_name TEXT,
+                    payment_mode TEXT DEFAULT 'Cash',
+                    date_time TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(rental_id) REFERENCES rentals(id) ON DELETE CASCADE
+                )
+            """)
+
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS customers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    phone TEXT UNIQUE NOT NULL,
+                    phone2 TEXT,
+                    address TEXT,
+                    is_regular INTEGER DEFAULT 0
+                )
+            """)
             # --- MIGRATIONS ---
             try:
                 c.execute("ALTER TABLE rentals ADD COLUMN cashier_name TEXT")
@@ -120,6 +144,16 @@ class DBManager:
             try:
                 c.execute("ALTER TABLE returns ADD COLUMN refund REAL DEFAULT 0")
                 print("[INFO] Added 'refund' column to existing returns table.")
+            except sqlite3.OperationalError: pass 
+
+            try:
+                c.execute("ALTER TABLE returns ADD COLUMN cashier_name TEXT")
+                print("[INFO] Added 'cashier_name' column to existing returns table.")
+            except sqlite3.OperationalError: pass
+            
+            try:
+                c.execute("ALTER TABLE refunds_history ADD COLUMN payment_mode TEXT DEFAULT 'Cash'")
+                print("[INFO] Added 'payment_mode' column to existing refunds_history table.")
             except sqlite3.OperationalError: pass 
             
             self.conn.commit()

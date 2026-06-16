@@ -1,4 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+
+# VSCode
+.vscode/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Build
+build/
+dist/
+
+# Backups
+backups/
+*.backup_*
+
+# Reports
+reports/
+
+# Secrets
+credentials.json
 token.json
 token.pickle
-node_modules/
-.env
+
+# Personal Documents
+ID_Proofs/
+
+# OS
+Thumbs.db
+.DS_Store

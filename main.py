@@ -1,6 +1,6 @@
 # main.py - REFINED VERSION (With Customers CRM Tab)
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 import sys
 import os
 from customers_tab import create_customers_tab  # New CRM tab import
@@ -17,6 +17,7 @@ class RentalBillingApp:
         self.db = None
         self.tab_control = None
         self.tab_reload_funcs = [] 
+        self.is_owner = False
         
     def initialize_database(self):
         """Initialize database with error handling"""
@@ -174,13 +175,33 @@ class RentalBillingApp:
             
             # --- NEW: Inject the Customers CRM Tab ---
             t_customers = create_customers_tab(self.tab_control, self.db)
-            
+
             # Add all reload functions so the Refresh button updates everything
             self.tab_reload_funcs = [
                 t1.get("reload"), t2.get("reload"), t3.get("reload"),
                 t_daily.get("reload"), t4.get("reload"), t5.get("reload"),
                 t_customers.get("reload")
             ]
+            
+            # --- NEW: Inject Materials Report Tab (Equipment Analytics) ONLY for owner view ---
+            if self.is_owner:
+                from materials_report_tab import create_materials_report_tab
+                t_materials = create_materials_report_tab(self.tab_control, self.db)
+                self.tab_reload_funcs.append(t_materials.get("reload"))
+            
+            # Centralize the callback registry to automatically refresh all tabs
+            original_reload_all = callbacks.reload_all_tabs
+            def global_reload_all_tabs():
+                try:
+                    if original_reload_all: original_reload_all()
+                except Exception as e:
+                    print(f"[WARN] Legacy reload failed: {e}")
+                for reload_func in self.tab_reload_funcs:
+                    if callable(reload_func):
+                        try: reload_func()
+                        except Exception as e: print(f"[WARN] Dynamic tab reload failed: {e}")
+            
+            callbacks.reload_all_tabs = global_reload_all_tabs
             
             self.tab_control.select(0)
             
@@ -224,7 +245,33 @@ class RentalBillingApp:
     def run(self):
         try:
             print("🚀 Starting Rental Billing Software v2.0...")
+            
+            # --- AUTHENTICATION ---
+            auth_root = tk.Tk()
+            auth_root.withdraw()
+            while True:
+                pwd = simpledialog.askstring("Authentication Required", "Enter Password:", show='*', parent=auth_root)
+                if pwd == "AMA":
+                    self.is_owner = False
+                    break
+                elif pwd == "AAKASHBENA":
+                    self.is_owner = True
+                    break
+                elif pwd is None:
+                    auth_root.destroy()
+                    sys.exit(0)
+                else:
+                    messagebox.showerror("Access Denied", "Incorrect Password", parent=auth_root)
+            auth_root.destroy()
+            # ----------------------
+            
             if not self.initialize_database(): sys.exit(1)
+            try:
+                from customers_tab import run_initial_regular_sync
+                run_initial_regular_sync(self.db)
+                print("👥 Background regular status sync initiated.")
+            except Exception as e:
+                print(f"[WARN] Failed to start initial regular customer sync: {e}")
             if not self.create_ui(): sys.exit(1)
             
             print("✅ Application started successfully")

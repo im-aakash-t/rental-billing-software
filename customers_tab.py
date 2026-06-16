@@ -149,8 +149,11 @@ def create_customers_tab(tab_control, db):
             for r in c.fetchall():
                 is_reg_text = "⭐ YES" if r['is_regular'] else "No"
                 tag = "is_regular" if r['is_regular'] else "normal"
+                name_disp = r['name']
+                if r['is_regular']:
+                    name_disp += " ⭐"
                 tree.insert("", "end", values=(
-                    r['name'], r['phone'], r['phone2'], r['address'], is_reg_text, r['id']
+                    name_disp, r['phone'], r['phone2'], r['address'], is_reg_text, r['id']
                 ), tags=(tag,))
         except Exception as e:
             log_error("Load Customers", e)
@@ -171,7 +174,10 @@ def create_customers_tab(tab_control, db):
         main_pad = ttk.Frame(popup, padding=15)
         main_pad.pack(fill="both", expand=True)
 
-        name_var_pop = tk.StringVar(value=current_data[0] if current_data else "")
+        display_name = current_data[0] if current_data else ""
+        if display_name.endswith(" ⭐"):
+            display_name = display_name[:-2]
+        name_var_pop = tk.StringVar(value=display_name)
         phone_var_pop = tk.StringVar(value=current_data[1] if current_data else "")
         phone2_var_pop = tk.StringVar(value=current_data[2] if current_data else "")
         is_regular_var = tk.BooleanVar(value=(current_data[4] == "⭐ YES") if current_data else False)
@@ -217,6 +223,11 @@ def create_customers_tab(tab_control, db):
                               (name, phone, phone2, address, is_reg))
                 conn.commit()
                 load_customers()
+                try:
+                    import callbacks
+                    if callbacks.reload_all_tabs: callbacks.reload_all_tabs()
+                except:
+                    pass
                 popup.destroy()
             except sqlite3.IntegrityError:
                 messagebox.showerror("Duplicate", "A customer with this Primary Phone number already exists!")
@@ -244,21 +255,34 @@ def create_customers_tab(tab_control, db):
 
 def sync_single_customer(db, data):
     try:
-        conn = db.get_connection()
-        c = conn.cursor()
-        name = data.get('name', '').strip()
         phone = data.get('phone', '').strip()
-        phone2 = data.get('phone2', '').strip()
-        address = data.get('address', '').strip()
         if not phone: return 
-        c.execute("""
-            INSERT INTO customers (name, phone, phone2, address, is_regular)
-            VALUES (?, ?, ?, ?, 0)
-            ON CONFLICT(phone) DO UPDATE SET
-                name = excluded.name,
-                phone2 = excluded.phone2,
-                address = excluded.address
-        """, (name, phone, phone2, address))
-        conn.commit()
+        from shared_imports import sync_customer_from_last_bill
+        sync_customer_from_last_bill(db, phone)
     except Exception as e:
         print(f"[WARN] Automatic CRM sync failed: {e}")
+
+def run_initial_regular_sync(db):
+    import threading
+    from shared_imports import sync_customer_from_last_bill
+    def sync():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(db.db_name)
+            conn.row_factory = sqlite3.Row
+            
+            class ThreadLocalDB:
+                def get_connection(self):
+                    return conn
+                    
+            thread_db = ThreadLocalDB()
+            
+            c = conn.cursor()
+            c.execute("SELECT phone FROM customers")
+            phones = [row[0] for row in c.fetchall()]
+            for phone in phones:
+                sync_customer_from_last_bill(thread_db, phone)
+            conn.close()
+        except Exception as e:
+            print(f"[WARN] Initial regular status sync failed: {e}")
+    threading.Thread(target=sync, daemon=True).start()

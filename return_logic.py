@@ -59,6 +59,7 @@ def get_full_rental_details(db, rental_id):
             "machines": clean_machines, "machine_codes": clean_codes,
             "quantities": clean_quantities, "rents": final_rents,
             "payment_mode": row.get("payment_mode", "Cash"), "total": saved_total,
+            "cashier_name": row.get("cashier_name", ""),
         }
     except Exception as e:
         log_error(f"get_full_rental_details ID {rental_id}", e)
@@ -107,9 +108,8 @@ def split_rental_bill(db, rental_id, quantities_to_return):
                 else:
                     c.execute("DELETE FROM rental_items WHERE id=?", (db_item_id,))
 
-        ratio = total_rent_value_moving / total_rent_value_original if total_rent_value_original > 0 else 0
-        advance_to_move = safe_float(data['advance']) * ratio
-        advance_to_keep = safe_float(data['advance']) - advance_to_move
+        advance_to_move = safe_float(data['advance'])
+        advance_to_keep = 0.0
         
         total_keep = total_rent_value_original - total_rent_value_moving
         new_bill_no = generate_next_bill_no(db)
@@ -118,13 +118,14 @@ def split_rental_bill(db, rental_id, quantities_to_return):
             INSERT INTO rentals (
                 bill_no, name, phone, phone2, address, id_proof,
                 total, advance, date, time, vehicle, payment_mode,
-                machine_codes, machines, rents, quantities 
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', '')
+                machine_codes, machines, rents, quantities, cashier_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', '', ?)
         """, (
             new_bill_no, data['name'], data['phone'], data.get('phone2', ''), 
             data.get('address', ''), data.get('id_proof', ''),
             total_rent_value_moving, advance_to_move,
-            data['date'], data['time'], data['vehicle'], data['payment_mode']
+            data['date'], data['time'], data['vehicle'], data['payment_mode'],
+            data.get('cashier_name', '')
         ))
         
         new_rental_id = c.lastrowid
@@ -190,7 +191,7 @@ def get_customer_history(db, keyword):
 def calculate_rental_days(start_date, start_time, return_date, return_time):
     return calculate_rental_days_unified(start_date, start_time, return_date, return_time)
 
-def save_return_data(db, rental_id, return_date, return_time, rental_days, due_amount, deduction, damage, balance, amount_paid, returned_items, returned_quantities, payment_mode, refund=0):
+def save_return_data(db, rental_id, return_date, return_time, rental_days, due_amount, deduction, damage, balance, amount_paid, returned_items, returned_quantities, payment_mode, refund=0, cashier_name=""):
     try:
         # CRITICAL FIX: Cast ALL inputs to floats so SQLite never silently rejects empty blank boxes
         due_amount = safe_float(due_amount)
@@ -209,18 +210,21 @@ def save_return_data(db, rental_id, return_date, return_time, rental_days, due_a
                 UPDATE returns SET
                     return_date=?, return_time=?, rental_days=?, due_amount=?,
                     deduction=?, damage=?, balance=?, amount_paid=?, refund=?,
-                    returned_items=?, returned_quantities=?, payment_mode=?
+                    returned_items=?, returned_quantities=?, payment_mode=?, cashier_name=?
                 WHERE rental_id=?
-            """, (return_date, return_time, rental_days, due_amount, deduction, damage, balance, amount_paid, refund, returned_items, returned_quantities, payment_mode, rental_id))
+            """, (return_date, return_time, rental_days, due_amount, deduction, damage, balance, amount_paid, refund, returned_items, returned_quantities, payment_mode, cashier_name, rental_id))
         else:
             c.execute("""
                 INSERT INTO returns (
                     rental_id, return_date, return_time, rental_days,
                     due_amount, deduction, damage, balance, amount_paid, refund,
-                    returned_items, returned_quantities, payment_mode
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (rental_id, return_date, return_time, rental_days, due_amount, deduction, damage, balance, amount_paid, refund, returned_items, returned_quantities, payment_mode))
+                    returned_items, returned_quantities, payment_mode, cashier_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (rental_id, return_date, return_time, rental_days, due_amount, deduction, damage, balance, amount_paid, refund, returned_items, returned_quantities, payment_mode, cashier_name))
         conn.commit()
+        
+        from shared_imports import update_regular_status_by_rental_id
+        update_regular_status_by_rental_id(db, rental_id)
     except Exception as e: raise
 
 def should_freeze_return_fields(rented_quantities, returned_quantities, balance, epsilon=0.01):
@@ -243,6 +247,9 @@ def save_installment(db, rental_id, amount, payment_mode, cashier_name, date_tim
             VALUES (?, ?, ?, ?, ?)
         """, (rental_id, amount, payment_mode, cashier_name, date_time))
         conn.commit()
+        
+        from shared_imports import update_regular_status_by_rental_id
+        update_regular_status_by_rental_id(db, rental_id)
         return True
     except Exception as e: raise e
 
@@ -252,5 +259,29 @@ def get_installments(db, rental_id):
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
         c.execute("SELECT * FROM installments WHERE rental_id = ? ORDER BY id ASC", (rental_id,))
+        return [dict(row) for row in c.fetchall()]
+    except Exception as e: return []
+
+def save_refund_history(db, rental_id, amount, cashier_name, payment_mode, date_time):
+    try:
+        conn = db.get_connection()
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO refunds_history (rental_id, amount, cashier_name, payment_mode, date_time)
+            VALUES (?, ?, ?, ?, ?)
+        """, (rental_id, amount, cashier_name, payment_mode, date_time))
+        conn.commit()
+        
+        from shared_imports import update_regular_status_by_rental_id
+        update_regular_status_by_rental_id(db, rental_id)
+        return True
+    except Exception as e: raise e
+
+def get_refunds(db, rental_id):
+    try:
+        conn = db.get_connection()
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute("SELECT * FROM refunds_history WHERE rental_id = ? ORDER BY id ASC", (rental_id,))
         return [dict(row) for row in c.fetchall()]
     except Exception as e: return []

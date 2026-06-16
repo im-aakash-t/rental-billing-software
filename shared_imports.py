@@ -75,6 +75,81 @@ def calculate_master_balance(daily_rent, rental_days, advance_paid, installments
 
     return due_amount, net_balance
 
+def get_regular_customer_phones(db):
+    try:
+        conn = db.get_connection()
+        c = conn.cursor()
+        c.execute("SELECT phone FROM customers WHERE is_regular = 1")
+        return {row[0] for row in c.fetchall()}
+    except Exception:
+        return set()
+
+def update_regular_status_for_phone(db, phone):
+    if not phone: return
+    try:
+        conn = db.get_connection()
+        c = conn.cursor()
+        c.execute("SELECT id FROM rentals WHERE phone = ? AND (cancelled IS NULL OR cancelled = 0)", (phone,))
+        rentals_rows = c.fetchall()
+        
+        # Local import to prevent circular dependency
+        from form_logic import calculate_balance_for_record, is_record_fully_returned
+        
+        completed_count = 0
+        for r_row in rentals_rows:
+            r_id = r_row[0]
+            if is_record_fully_returned(r_id, db):
+                balance = calculate_balance_for_record(r_id, db)
+                if abs(balance) < 0.01:
+                    completed_count += 1
+                    
+        is_regular = 1 if completed_count >= 20 else 0
+        c.execute("UPDATE customers SET is_regular = ? WHERE phone = ?", (is_regular, phone))
+        conn.commit()
+    except Exception as e:
+        print(f"[WARN] Failed to update regular status for phone {phone}: {e}")
+
+def update_regular_status_by_rental_id(db, rental_id):
+    try:
+        conn = db.get_connection()
+        c = conn.cursor()
+        c.execute("SELECT phone FROM rentals WHERE id = ?", (rental_id,))
+        res = c.fetchone()
+        if res and res[0]:
+            update_regular_status_for_phone(db, res[0])
+    except Exception as e:
+        print(f"[WARN] Failed to update regular status by rental id {rental_id}: {e}")
+
+def sync_customer_from_last_bill(db, phone):
+    if not phone: return
+    try:
+        conn = db.get_connection()
+        c = conn.cursor()
+        # Find the most recent non-cancelled rental for this phone number
+        c.execute("""
+            SELECT name, phone2, address 
+            FROM rentals 
+            WHERE phone = ? AND (cancelled IS NULL OR cancelled = 0)
+            ORDER BY id DESC LIMIT 1
+        """, (phone,))
+        row = c.fetchone()
+        if row:
+            name, phone2, address = row
+            # Upsert into customers table
+            c.execute("""
+                INSERT INTO customers (name, phone, phone2, address, is_regular)
+                VALUES (?, ?, ?, ?, 0)
+                ON CONFLICT(phone) DO UPDATE SET
+                    name = excluded.name,
+                    phone2 = excluded.phone2,
+                    address = excluded.address
+            """, (name or "", phone, phone2 or "", address or ""))
+            conn.commit()
+            
+            update_regular_status_for_phone(db, phone)
+    except Exception as e:
+        print(f"[WARN] Failed to sync customer from last bill for phone {phone}: {e}")
+
 __all__ = [
     'DBManager', 'safe_float', 'safe_int', 'sync_lists', 'validate_phone', 'validate_date', 
     'validate_time', 'format_currency', 'sanitize_sql_input', 'calculate_rental_total',
@@ -87,5 +162,7 @@ __all__ = [
     'save_return_data', 'generate_return_pdf', 'should_freeze_return_fields', 
     'calculate_rental_days', 'get_customer_history', 'ExportManager',
     'BackupManager', 'backup_files', 'set_modern_theme', 'create_tooltip',
-    'calculate_master_balance'
+    'calculate_master_balance', 'get_regular_customer_phones',
+    'update_regular_status_for_phone', 'update_regular_status_by_rental_id',
+    'sync_customer_from_last_bill'
 ]
