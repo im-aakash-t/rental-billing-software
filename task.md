@@ -1,7 +1,0 @@
-- `[x]` Task 1: Update `db_manager.py` to create `refunds_history` table.
-- `[x]` Task 2: Update `return_logic.py` to save and load refunds history.
-- `[x]` Task 3: Update `return_form.py` to implement the refund popup, radio buttons, and the new treeview logic.
-- `[x]` Task 4: Update `return_form.py` to pass the correct net balance to `billing.py` for dynamic PDF printing.
-- `[x]` Task 5: Create `materials_report_tab.py` for Material Analytics.
-- `[x]` Task 6: Update `main.py` to add the `MEENA@11` password prompt and register the new tab.
-- `[x]` Task 7: Update `form_logic.py` to fix the address autofill bug.
