@@ -107,6 +107,8 @@ def create_return_form(parent, db):
     }
     fields.update(field_configs)
 
+    deduction_days_var = StringVar(value="")
+
     rents = []
     rental_machine_codes = []
     rented_quantities_ref = [] 
@@ -339,7 +341,18 @@ def create_return_form(parent, db):
     widget_refs = {}
 
     for label, field_key, row, col in field_layout:
-        ttk.Label(main_left_frame, text=label, font=HEADER_FONT).grid(row=row, column=col, sticky="e", padx=PAD_X, pady=PAD_Y)
+        if field_key == "deduction":
+            ded_label_container = ttk.Frame(main_left_frame)
+            ded_label_container.grid(row=row, column=col, sticky="e", padx=PAD_X, pady=PAD_Y)
+            
+            ded_days_entry = ttk.Entry(ded_label_container, textvariable=deduction_days_var, width=3, font=FORM_FONT, justify="center")
+            ded_days_entry.pack(side="left", padx=(0, 5))
+            widget_refs['deduction_days'] = ded_days_entry
+            
+            lbl = ttk.Label(ded_label_container, text=label, font=HEADER_FONT)
+            lbl.pack(side="left")
+        else:
+            ttk.Label(main_left_frame, text=label, font=HEADER_FONT).grid(row=row, column=col, sticky="e", padx=PAD_X, pady=PAD_Y)
         
         # RESTORED FIX: amount_paid is locked back to readonly to force popup usage
         state = "readonly" if field_key in ["rental_days", "due", "advance", "balance", "past_due", "amount_paid", "refund"] else "normal"
@@ -403,7 +416,7 @@ def create_return_form(parent, db):
         calculation_frozen = (state == 'disabled')
         # Amount paid and refund are not in this list so they stay readonly naturally, 
         # but we freeze the rest of the actual form entry boxes
-        for k in ["date", "time", "damage", "deduction"]:
+        for k in ["date", "time", "damage", "deduction", "deduction_days"]:
             if k in widget_refs: widget_refs[k].configure(state=state)
         
         widget_refs['pm_radio1'].configure(state=state)
@@ -419,7 +432,7 @@ def create_return_form(parent, db):
         else:
             edit_btn.grid_remove()
             if not loading: recalc_due()
-
+ 
     def clear_fields():
         set_return_form_state('normal')
         for k, v in fields.items():
@@ -428,6 +441,7 @@ def create_return_form(parent, db):
             else: v.set("0.00" if k in ("due", "deduction", "damage", "advance", "amount_paid", "balance", "past_due", "refund") else "")
         fields["date"].set(datetime.now().strftime("%d-%m-%y"))
         fields["time"].set(datetime.now().strftime("%I:%M %p"))
+        deduction_days_var.set("")
         for i in range(5):
             machine_name_labels[i].config(text="")
             spinboxes[i].config(from_=0, to=0) 
@@ -514,6 +528,44 @@ def create_return_form(parent, db):
     fields["deduction"].trace_add("write", lambda *_: recalc_balance_only())
     fields["damage"].trace_add("write", lambda *_: recalc_balance_only())
     fields["refund"].trace_add("write", lambda *_: recalc_balance_only()) 
+
+    updating_deduction = False
+
+    def on_deduction_days_change(*args):
+        nonlocal updating_deduction
+        if updating_deduction: return
+        val_str = deduction_days_var.get().strip()
+        if val_str:
+            try:
+                days = safe_float(val_str)
+                daily_rent = sum(safe_float(r) for r in rents) if rents else 0.0
+                updating_deduction = True
+                fields["deduction"].set(f"{days * daily_rent:.2f}")
+                updating_deduction = False
+            except:
+                pass
+
+    deduction_days_var.trace_add("write", on_deduction_days_change)
+
+    def on_deduction_field_change(*args):
+        nonlocal updating_deduction
+        if updating_deduction: return
+        val_str = deduction_days_var.get().strip()
+        if val_str:
+            try:
+                days = safe_float(val_str)
+                daily_rent = sum(safe_float(r) for r in rents) if rents else 0.0
+                ded_val = safe_float(fields["deduction"].get())
+                if abs(ded_val - days * daily_rent) > 0.01:
+                    updating_deduction = True
+                    deduction_days_var.set("")
+                    updating_deduction = False
+            except:
+                updating_deduction = True
+                deduction_days_var.set("")
+                updating_deduction = False
+
+    fields["deduction"].trace_add("write", on_deduction_field_change)
 
     def check_if_fully_returned():
         spin_idx = 0

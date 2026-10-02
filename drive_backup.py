@@ -10,12 +10,18 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
-TOKEN_FILE = 'token.json'
-CREDENTIALS_FILE = 'credentials.json'
+import sys
 
-DB_FILE = 'rentals.db'
-ID_FOLDER = 'ID_Proofs'
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(__file__)
+
+SCOPES = ['https://www.googleapis.com/auth/drive.file']
+TOKEN_FILE = os.path.join(BASE_DIR, 'token.json')
+CREDENTIALS_FILE = os.path.join(BASE_DIR, 'credentials.json')
+DB_FILE = os.path.join(BASE_DIR, 'rentals.db')
+ID_FOLDER = os.path.join(BASE_DIR, 'ID_Proofs')
 CLOUD_ID_FOLDER = 'Rental_ID_Proofs' # Name of folder in Google Drive
 
 def show_message(msg_type, title, message):

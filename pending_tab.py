@@ -10,7 +10,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
-from utils import safe_float, log_error
+from utils import safe_float, safe_int, log_error, parse_date_key
 
 def create_pending_tab(tab_control, db):
     tab = ttk.Frame(tab_control)
@@ -42,6 +42,13 @@ def create_pending_tab(tab_control, db):
     ttk.Radiobutton(top_frame, text="All", variable=return_status_var, value="all", style="Filter.TRadiobutton").pack(side="left", padx=5)
     ttk.Radiobutton(top_frame, text="Returned", variable=return_status_var, value="returned", style="Filter.TRadiobutton").pack(side="left", padx=5)
     ttk.Radiobutton(top_frame, text="Not Returned", variable=return_status_var, value="not_returned", style="Filter.TRadiobutton").pack(side="left", padx=5)
+
+    date_sort_var = tk.StringVar(value="new_to_old")
+    ttk.Label(top_frame, text=" |  📅 Date:", font=("Segoe UI", 10, "bold")).pack(side="left", padx=(10, 5))
+    rb_date_new = ttk.Radiobutton(top_frame, text="New to Old", variable=date_sort_var, value="new_to_old", style="Filter.TRadiobutton")
+    rb_date_new.pack(side="left", padx=5)
+    rb_date_old = ttk.Radiobutton(top_frame, text="Old to New", variable=date_sort_var, value="old_to_new", style="Filter.TRadiobutton")
+    rb_date_old.pack(side="left", padx=5)
 
     def print_pending_list():
         if not tree.get_children():
@@ -180,8 +187,12 @@ def create_pending_tab(tab_control, db):
         from shared_imports import get_regular_customer_phones
         regular_phones = get_regular_customer_phones(db)
 
-        # Sort globally
-        all_data.sort(key=lambda x: x["balance"], reverse=True)
+        # Sort globally by Date according to selected sort order
+        is_new_to_old = (date_sort_var.get() == "new_to_old")
+        all_data.sort(
+            key=lambda x: (parse_date_key(x.get("date", "")), safe_int(x.get("bill_no", 0))),
+            reverse=is_new_to_old
+        )
         
         for row in all_data:
             # Apply Search Filter
@@ -211,10 +222,14 @@ def create_pending_tab(tab_control, db):
                 f"{row['amount_paid']:.2f}", f"{row['balance']:.2f}"
             ), tags=(tag,))
 
+    rb_date_new.config(command=load_pending_data)
+    rb_date_old.config(command=load_pending_data)
+
     # Bind variables to trigger table reload on change
     search_var.trace_add("write", load_pending_data)
     filter_var.trace_add("write", load_pending_data)
     return_status_var.trace_add("write", load_pending_data)
+    date_sort_var.trace_add("write", load_pending_data)
     
     load_pending_data()
     callbacks.pending_reload_table = load_pending_data

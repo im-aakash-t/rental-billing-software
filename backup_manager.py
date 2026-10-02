@@ -13,7 +13,10 @@ class BackupManager:
     
     def __init__(self, db):
         self.db = db
-        self.backup_dir = "backups"
+        if getattr(sys, 'frozen', False):
+            self.backup_dir = os.path.join(os.path.dirname(sys.executable), "backups")
+        else:
+            self.backup_dir = "backups"
         self.auto_backup_dir = os.path.join(self.backup_dir, "auto")
         os.makedirs(self.auto_backup_dir, exist_ok=True)
     
@@ -29,12 +32,18 @@ class BackupManager:
             backup_path = os.path.join(self.backup_dir, backup_filename)
         
         try:
+            if getattr(sys, 'frozen', False):
+                base_dir = os.path.dirname(sys.executable)
+            else:
+                base_dir = "."
+
             with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as backup_zip:
                 # Backup essential files
                 essential_files = ["rentals.db", "materials.csv"]
                 for file in essential_files:
-                    if os.path.exists(file):
-                        backup_zip.write(file, file)
+                    full_path = os.path.join(base_dir, file)
+                    if os.path.exists(full_path):
+                        backup_zip.write(full_path, file)
                 
                 # Backup directories if they exist and requested
                 directories_to_backup = []
@@ -42,23 +51,25 @@ class BackupManager:
                     directories_to_backup = ["reports", "exports"]
                 
                 for directory in directories_to_backup:
-                    if os.path.exists(directory):
-                        for root, dirs, files in os.walk(directory):
+                    full_dir = os.path.join(base_dir, directory)
+                    if os.path.exists(full_dir):
+                        for root, dirs, files in os.walk(full_dir):
                             for file in files:
                                 if directory == "reports" and file.endswith('.pdf'):
                                     file_path = os.path.join(root, file)
-                                    arcname = os.path.relpath(file_path, ".")
+                                    arcname = os.path.relpath(file_path, base_dir)
                                     backup_zip.write(file_path, arcname)
                                 elif directory == "exports" and file.endswith('.csv'):
                                     file_path = os.path.join(root, file)
-                                    arcname = os.path.relpath(file_path, ".")
+                                    arcname = os.path.relpath(file_path, base_dir)
                                     backup_zip.write(file_path, arcname)
                 
                 # Add backup metadata
+                db_path = os.path.join(base_dir, "rentals.db")
                 metadata = {
                     "backup_type": backup_type,
                     "timestamp": timestamp,
-                    "database_size": os.path.getsize("rentals.db") if os.path.exists("rentals.db") else 0,
+                    "database_size": os.path.getsize(db_path) if os.path.exists(db_path) else 0,
                     "includes_attachments": include_attachments,
                     "version": "2.0"
                 }
@@ -155,6 +166,11 @@ class BackupManager:
     def restore_backup(self, backup_path, restore_attachments=True):
         """Restore from a backup file"""
         try:
+            if getattr(sys, 'frozen', False):
+                base_dir = os.path.dirname(sys.executable)
+            else:
+                base_dir = "."
+
             # Create restore backup (in case something goes wrong)
             restore_backup_path, success = self.create_backup("restore_point")
             if not success:
@@ -165,13 +181,13 @@ class BackupManager:
                 files_to_extract = ['rentals.db', 'materials.csv']
                 for file in files_to_extract:
                     if file in backup_zip.namelist():
-                        backup_zip.extract(file, '.')
+                        backup_zip.extract(file, base_dir)
                 
                 # Extract attachments if requested
                 if restore_attachments:
                     for member in backup_zip.namelist():
                         if member.startswith('reports/') or member.startswith('exports/'):
-                            backup_zip.extract(member, '.')
+                            backup_zip.extract(member, base_dir)
             
             return "Restore completed successfully", True
             
@@ -181,7 +197,7 @@ class BackupManager:
                 try:
                     with zipfile.ZipFile(restore_backup_path, 'r') as restore_zip:
                         if 'rentals.db' in restore_zip.namelist():
-                            restore_zip.extract('rentals.db', '.')
+                            restore_zip.extract('rentals.db', base_dir)
                 except:
                     pass
             

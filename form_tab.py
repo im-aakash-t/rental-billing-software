@@ -106,6 +106,7 @@ def create_form_tab(tab_control, db):
 
     machine_code_vars = [StringVar() for _ in range(MAX_MACHINES_PER_BILL)]
     machine_name_vars = [StringVar() for _ in range(MAX_MACHINES_PER_BILL)]
+    spare_vars = [tk.BooleanVar(value=False) for _ in range(MAX_MACHINES_PER_BILL)]
     quantity_vars = [StringVar() for _ in range(MAX_MACHINES_PER_BILL)]
     rent_vars = [StringVar() for _ in range(MAX_MACHINES_PER_BILL)]
 
@@ -175,8 +176,8 @@ def create_form_tab(tab_control, db):
                 scan_status_lbl.config(text="✅ Saved", foreground="green")
             else:
                 scan_status_lbl.config(text="") # Cleared or Cancelled
-        except ImportError:
-            messagebox.showerror("Error", "scanner_helper.py missing! Cannot scan.")
+        except ImportError as e:
+            messagebox.showerror("Error", f"scanner_helper.py missing or dependency import failed! Cannot scan.\n\nDetails: {e}")
             scan_status_lbl.config(text="")
 
     scan_btn = ttk.Button(id_frame, text="🖨️", width=8, command=on_scan_click)
@@ -193,8 +194,9 @@ def create_form_tab(tab_control, db):
 
     ttk.Label(machines_frame, text="Code", font=HEADER_FONT).grid(row=0, column=0, padx=PAD_X, pady=0)
     ttk.Label(machines_frame, text="Machine Name", font=HEADER_FONT).grid(row=0, column=1, padx=PAD_X, pady=0)
-    ttk.Label(machines_frame, text="Qty", font=HEADER_FONT).grid(row=0, column=2, padx=PAD_X, pady=0)
-    ttk.Label(machines_frame, text="Rent/Day", font=HEADER_FONT).grid(row=0, column=3, padx=PAD_X, pady=0)
+    ttk.Label(machines_frame, text="Spare", font=HEADER_FONT).grid(row=0, column=2, padx=PAD_X, pady=0)
+    ttk.Label(machines_frame, text="Qty", font=HEADER_FONT).grid(row=0, column=3, padx=PAD_X, pady=0)
+    ttk.Label(machines_frame, text="Rent/Day", font=HEADER_FONT).grid(row=0, column=4, padx=PAD_X, pady=0)
 
     def update_total(*args):
         try:
@@ -217,13 +219,16 @@ def create_form_tab(tab_control, db):
         # --- NEW: Hidden floating listbox for suggestions ---
         suggestion_box = tk.Listbox(machines_frame, height=4, font=FORM_FONT)
 
+        spare_check = ttk.Checkbutton(machines_frame, variable=spare_vars[i])
+        spare_check.grid(row=i + 1, column=2, padx=PAD_X, pady=1)
+
         qty_entry = ttk.Entry(machines_frame, textvariable=quantity_vars[i], width=6, font=FORM_FONT, style="Form.TEntry")
-        qty_entry.grid(row=i + 1, column=2, padx=PAD_X, pady=1)
+        qty_entry.grid(row=i + 1, column=3, padx=PAD_X, pady=1)
 
         rent_entry = ttk.Entry(machines_frame, textvariable=rent_vars[i], width=10, font=FORM_FONT, style="Form.TEntry")
-        rent_entry.grid(row=i + 1, column=3, padx=PAD_X, pady=1)
+        rent_entry.grid(row=i + 1, column=4, padx=PAD_X, pady=1)
 
-        machine_entries.extend([code_entry, m_name_entry, qty_entry, rent_entry])
+        machine_entries.extend([code_entry, m_name_entry, spare_check, qty_entry, rent_entry])
 
         def make_handlers(idx, name_entry, sugg_box):
             is_updating = {"code": False, "name": False}
@@ -460,6 +465,7 @@ def create_form_tab(tab_control, db):
             "cashier_name": cashier_name_var,
             "bill_no": current_bill_no, "mode": current_mode,
             "machine_codes": machine_code_vars, "machine_names": machine_name_vars,
+            "spare_vars": spare_vars,
             "quantities": quantity_vars, "rents": rent_vars,
             "record_id": record_id_var,
             "db": db,

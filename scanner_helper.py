@@ -9,7 +9,11 @@ def scan_and_save_id(bill_no, name, id_type):
     and saves it to the ID_Proofs folder.
     """
     # 1. Create the Master Folder if it doesn't exist
-    save_dir = "ID_Proofs"
+    import sys
+    if getattr(sys, 'frozen', False):
+        save_dir = os.path.join(os.path.dirname(sys.executable), "ID_Proofs")
+    else:
+        save_dir = "ID_Proofs"
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 

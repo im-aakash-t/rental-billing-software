@@ -240,8 +240,11 @@ class AnalyticsDashboard:
         conn = self.db.get_connection()
         c = conn.cursor()
         inventory = {}
+        csv_path = 'materials.csv'
+        if not os.path.exists(csv_path):
+            csv_path = os.path.join(os.path.dirname(__file__), 'materials.csv')
         try:
-            with open('materials.csv', mode='r', encoding='utf-8') as f:
+            with open(csv_path, mode='r', encoding='utf-8') as f:
                 for row in csv.DictReader(f):
                     name = row.get('name', '').strip()
                     if name: inventory[name] = safe_int(row.get('quantity', 0))
@@ -258,7 +261,7 @@ class AnalyticsDashboard:
         rented_out = {row[0]: safe_int(row[1]) for row in c.fetchall()}
         
         stock_data = []
-        for machine in sorted(set(list(inventory.keys()) + list(rented_out.keys()))):
+        for machine in sorted(inventory.keys()):
             total_qty = inventory.get(machine, 0)
             rented_qty = rented_out.get(machine, 0)
             stock_data.append({'machine': machine, 'total': total_qty, 'rented': rented_qty, 'available': max(0, total_qty - rented_qty)})

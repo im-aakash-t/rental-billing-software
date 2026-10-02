@@ -249,6 +249,8 @@ def create_materials_report_tab(tab_control, db):
             aggregated = defaultdict(lambda: {"bills": set(), "rev": 0.0})
             for row in raw_records:
                 name = row['machine_name']
+                if name.endswith(" (with spare)"):
+                    name = name[:-13]
                 days = safe_int(row['rental_days'])
                 if days < 1:
                     days = 1

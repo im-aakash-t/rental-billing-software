@@ -29,6 +29,18 @@ def calculate_rental_days_unified(start_date_str, start_time_str, return_date_st
         logger.warning(f"Date calculation error: {e}")
         return 1
 
+def parse_date_key(date_str):
+    if not date_str:
+        return datetime.min
+    date_str = str(date_str).strip()
+    for fmt in ("%d-%m-%Y", "%d-%m-%y", "%Y-%m-%d", "%d/%m/%Y", "%d/%m/%y"):
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            pass
+    return datetime.min
+
+
 def safe_float(val, default=0.0):
     if val is None: return default
     if isinstance(val, str):

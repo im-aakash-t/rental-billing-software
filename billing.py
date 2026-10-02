@@ -1,5 +1,6 @@
 # billing.py - FULLY REFINED VERSION (With Name in Address)
 import os
+import sys
 import sqlite3
 import webbrowser
 import textwrap
@@ -10,7 +11,10 @@ from bill_number import generate_next_bill_no
 from utils import safe_float, safe_int, sync_lists, validate_phone, validate_date, validate_time, sanitize_sql_input
 from materials import get_material_by_code
 
-REPORTS_DIR = "reports"
+if getattr(sys, 'frozen', False):
+    REPORTS_DIR = os.path.join(os.path.dirname(sys.executable), "reports")
+else:
+    REPORTS_DIR = "reports"
 
 class BillingError(Exception):
     """Custom exception for billing operations"""
@@ -259,6 +263,14 @@ def generate_bill(bill_no, date, time, address, phone, items, qty, rent, total, 
         c = canvas.Canvas(output_pdf, pagesize=A4)
         width, height = A4
 
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(__file__)
+
+        if not os.path.isabs(background_path):
+            background_path = os.path.join(base_dir, background_path)
+
         if not os.path.exists(background_path):
             raise BillingError(f"Background image not found: {background_path}")
 
@@ -276,7 +288,10 @@ def generate_bill(bill_no, date, time, address, phone, items, qty, rent, total, 
         if phone:
             try:
                 import sqlite3
-                conn = sqlite3.connect("rentals.db")
+                db_path = "rentals.db"
+                if getattr(sys, 'frozen', False):
+                    db_path = os.path.join(os.path.dirname(sys.executable), db_path)
+                conn = sqlite3.connect(db_path)
                 cur = conn.cursor()
                 cur.execute("SELECT is_regular FROM customers WHERE phone = ?", (str(phone).strip(),))
                 res = cur.fetchone()
@@ -321,6 +336,11 @@ def generate_bill(bill_no, date, time, address, phone, items, qty, rent, total, 
                 continue
             if not item_name: continue
 
+            has_spare = False
+            if item_name.lower().endswith(" (with spare)"):
+                item_name = item_name[:-13].strip()
+                has_spare = True
+
             # Truncate long names to prevent overlap
             display_name = (item_name[:28] + '..') if len(item_name) > 30 else item_name
 
@@ -328,7 +348,14 @@ def generate_bill(bill_no, date, time, address, phone, items, qty, rent, total, 
             c.drawString(110, y, display_name)                             # Item Name
             c.drawString(300, y, str(qty[i]))                              # Quantity
             c.drawString(360, y, str(int(safe_float(rent[i]))))            # Rent/Amount
-            y -= 25 # Spacing between rows
+            
+            if has_spare:
+                c.setFont("Helvetica-Bold", 9)
+                c.drawString(110, y - 13, "(WITH SPARE)")
+                c.setFont("Helvetica", 12)
+                y -= 38
+            else:
+                y -= 25 # Spacing between rows
 
         # --- FIXED TOTALS ALIGNMENT ---
         # Fixed Y coordinate so the totals don't slide down with extra items

@@ -12,7 +12,11 @@ class ExportManager:
     
     def __init__(self, db):
         self.db = db
-        self.exports_dir = "exports"
+        import sys
+        if getattr(sys, 'frozen', False):
+            self.exports_dir = os.path.join(os.path.dirname(sys.executable), "exports")
+        else:
+            self.exports_dir = "exports"
         os.makedirs(self.exports_dir, exist_ok=True)
     
     def export_rentals_to_csv(self, filename=None, date_range=None):

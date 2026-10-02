@@ -43,6 +43,8 @@ def clear_form_fields(vars_dict, address_text):
         for i in range(MAX_MACHINES_PER_BILL):
             vars_dict["machine_codes"][i].set("")
             vars_dict["machine_names"][i].set("")
+            if "spare_vars" in vars_dict:
+                vars_dict["spare_vars"][i].set(False)
             vars_dict["quantities"][i].set("")
             vars_dict["rents"][i].set("")
             
@@ -50,11 +52,18 @@ def clear_form_fields(vars_dict, address_text):
 
 def submit_form(vars_dict, address_text, db, clear_form_cb, load_table_cb):
     try:
+        machines_list = []
+        for i, v in enumerate(vars_dict["machine_names"]):
+            name_val = v.get().strip()
+            if name_val and "spare_vars" in vars_dict and vars_dict["spare_vars"][i].get():
+                name_val += " (with spare)"
+            machines_list.append(name_val)
+
         data = {
             "bill_no": vars_dict["bill_no"].get(), "mode": vars_dict["mode"].get(),
             "name": vars_dict["name"].get().strip(), "phone": vars_dict["phone"].get().strip(),
             "phone2": vars_dict["phone2"].get().strip(), "address": address_text.get("1.0", tk.END).strip(),
-            "id_proof": vars_dict["id_proof"].get().strip(), "machines": [v.get().strip() for v in vars_dict["machine_names"]],
+            "id_proof": vars_dict["id_proof"].get().strip(), "machines": machines_list,
             "rents": [v.get().strip() for v in vars_dict["rents"]], "quantities": [v.get().strip() for v in vars_dict["quantities"]],
             "machine_codes": [v.get().strip() for v in vars_dict["machine_codes"]], "total": vars_dict["total"].get().strip(),
             "advance": vars_dict["advance"].get().strip(), "date": vars_dict["date"].get().strip(),
@@ -273,7 +282,17 @@ def populate_form_from_record(record, field_vars, address_text):
         for item in items:
             if display_idx >= MAX_MACHINES_PER_BILL: break
             field_vars["machine_codes"][display_idx].set(item[0] or "")
-            field_vars["machine_names"][display_idx].set(item[1] or "")
+            
+            name = item[1] or ""
+            is_spare = False
+            if name.endswith(" (with spare)"):
+                name = name[:-13]
+                is_spare = True
+                
+            field_vars["machine_names"][display_idx].set(name)
+            if "spare_vars" in field_vars:
+                field_vars["spare_vars"][display_idx].set(is_spare)
+                
             field_vars["quantities"][display_idx].set(str(item[2]) if item[2] is not None else "")
             field_vars["rents"][display_idx].set(str(item[3]) if item[3] is not None else "")
             display_idx += 1
@@ -281,6 +300,8 @@ def populate_form_from_record(record, field_vars, address_text):
         for i in range(display_idx, MAX_MACHINES_PER_BILL):
             field_vars["machine_codes"][i].set("")
             field_vars["machine_names"][i].set("")
+            if "spare_vars" in field_vars:
+                field_vars["spare_vars"][i].set(False)
             field_vars["quantities"][i].set("")
             field_vars["rents"][i].set("")
     except Exception as e: log_error("Form population", e)

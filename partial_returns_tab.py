@@ -11,7 +11,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
 
-from utils import safe_int, safe_float, log_error
+from utils import safe_int, safe_float, log_error, parse_date_key
 from materials import get_material_by_code
 
 # --- GLOBAL FONT SETTINGS ---
@@ -109,6 +109,17 @@ def create_partial_returns_tab(tab_control, db, update_return_fields_from_select
     search_var = tk.StringVar()
     search_entry = ttk.Entry(top_frame, textvariable=search_var, width=40, font=("Segoe UI", 11))
     search_entry.pack(side="left")
+
+    date_sort_var = tk.StringVar(value="new_to_old")
+    ttk.Label(top_frame, text=" | 📅 Date:", font=("Segoe UI", 11, "bold")).pack(side="left", padx=(15, 5))
+    
+    style = ttk.Style()
+    style.configure("Filter.TRadiobutton", font=("Segoe UI", 10))
+
+    rb_ret_new = ttk.Radiobutton(top_frame, text="New to Old", variable=date_sort_var, value="new_to_old", style="Filter.TRadiobutton")
+    rb_ret_new.pack(side="left", padx=5)
+    rb_ret_old = ttk.Radiobutton(top_frame, text="Old to New", variable=date_sort_var, value="old_to_new", style="Filter.TRadiobutton")
+    rb_ret_old.pack(side="left", padx=5)
     
     # Print Button logic
     def print_search_results():
@@ -237,6 +248,12 @@ def create_partial_returns_tab(tab_control, db, update_return_fields_from_select
             
             records = get_pending_returns(db)
             
+            is_new_to_old = (date_sort_var.get() == "new_to_old")
+            records.sort(
+                key=lambda x: (parse_date_key(x.get("date", "")), safe_int(x.get("bill_no", 0))),
+                reverse=is_new_to_old
+            )
+            
             for rec in records:
                 # Add phone2 safely to search string
                 phone2 = rec.get("phone2") or ""
@@ -271,9 +288,13 @@ def create_partial_returns_tab(tab_control, db, update_return_fields_from_select
                     
         except Exception as e:
             log_error("Loading pending returns table", e)
+
+    rb_ret_new.config(command=load_data)
+    rb_ret_old.config(command=load_data)
             
-    # Trigger load_data automatically when user types in search bar
+    # Trigger load_data automatically when user types in search bar or changes date filter
     search_var.trace_add("write", load_data)
+    date_sort_var.trace_add("write", load_data)
 
     btn_frame = ttk.Frame(tab)
     btn_frame.grid(row=3, column=0, pady=10)

@@ -6,6 +6,9 @@ from datetime import datetime
 class DBManager:
     """Enhanced DB manager with proper constraints, indexes, and error handling."""
     def __init__(self, db_name="rentals.db"):
+        import sys
+        if getattr(sys, 'frozen', False) and db_name == "rentals.db":
+            db_name = os.path.join(os.path.dirname(sys.executable), db_name)
         self.db_name = db_name
         try:
             self.conn = sqlite3.connect(db_name)

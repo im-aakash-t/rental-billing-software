@@ -256,22 +256,52 @@ def create_daily_report_tab(tab_control, db):
                     mode = r['payment_mode']
                     records.append({
                         "dt_sort": row_dt, "dt_disp": dt_display, "bill": r['bill_no'], "name": r['name'],
-                        "type": "Final Payment (In)", "desc": "Balance Paid on Return",
+                        "type": "Final Payment (In)", "desc": "Balance Paid on Return (Legacy)",
                         "amount": actual_final_payment, "mode": mode, "tag": "in"
                     })
                     if mode.lower() in ['upi', 'gpay', 'phonepe', 'online']: gpay_in += actual_final_payment
                     else: cash_in += actual_final_payment
                     
-                refund = safe_float(r.get('refund', 0))
-                if refund > 0:
+                refund_db = safe_float(r.get('refund', 0))
+                c2.execute("SELECT SUM(amount) FROM refunds_history WHERE rental_id=?", (r['rental_id'],))
+                ref_history_sum = safe_float(c2.fetchone()[0])
+                actual_final_refund = max(0.0, refund_db - ref_history_sum)
+                if actual_final_refund > 0:
                     mode = r['payment_mode']
                     records.append({
                         "dt_sort": row_dt, "dt_disp": dt_display, "bill": r['bill_no'], "name": r['name'],
-                        "type": "Refund (Out)", "desc": "Refund Given to Customer",
-                        "amount": refund, "mode": mode, "tag": "out"
+                        "type": "Refund (Out)", "desc": "Refund Given to Customer (Legacy)",
+                        "amount": actual_final_refund, "mode": mode, "tag": "out"
                     })
-                    if mode.lower() in ['upi', 'gpay', 'phonepe', 'online']: gpay_out += refund
-                    else: cash_out += refund
+                    if mode.lower() in ['upi', 'gpay', 'phonepe', 'online']: gpay_out += actual_final_refund
+                    else: cash_out += actual_final_refund
+
+            c.execute("SELECT rh.date_time, r.bill_no, r.name, rh.amount, rh.payment_mode FROM refunds_history rh JOIN rentals r ON rh.rental_id = r.id")
+            for r_obj in c.fetchall():
+                r = dict(r_obj)
+                
+                if keyword and keyword not in str(r.get('bill_no', '')).lower() and keyword not in str(r.get('name', '')).lower():
+                    continue
+
+                dt_str = r['date_time'] 
+                try:
+                    parts = dt_str.split(' ', 1)
+                    d_part = parts[0]
+                    t_part = parts[1] if len(parts) > 1 else "12:00 AM"
+                    row_dt = parse_datetime(d_part, t_part)
+                except: continue
+                
+                if not (start_dt <= row_dt <= end_dt): continue
+
+                amt = safe_float(r['amount'])
+                mode = r['payment_mode']
+                records.append({
+                    "dt_sort": row_dt, "dt_disp": dt_str, "bill": r['bill_no'], "name": r['name'],
+                    "type": "Refund (Out)", "desc": "Refund Given to Customer",
+                    "amount": amt, "mode": mode, "tag": "out"
+                })
+                if mode.lower() in ['upi', 'gpay', 'phonepe', 'online']: gpay_out += amt
+                else: cash_out += amt
 
             c.execute("SELECT i.date_time, r.bill_no, r.name, i.amount, i.payment_mode FROM installments i JOIN rentals r ON i.rental_id = r.id")
             for r_obj in c.fetchall():
