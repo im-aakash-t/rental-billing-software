@@ -153,29 +153,9 @@ class AnalyticsDashboard:
         }
 
     def get_profit_on_date(self, target_date):
-        conn = self.db.get_connection()
-        c = conn.cursor()
-        
-        c.execute("SELECT COALESCE(SUM(advance), 0) FROM rentals WHERE date = ? AND (cancelled IS NULL OR cancelled = 0)", (target_date,))
-        advances = safe_float(c.fetchone()[0])
-        
-        c.execute("""
-            SELECT SUM(ret.amount_paid - COALESCE((SELECT SUM(amount) FROM installments WHERE rental_id = ret.rental_id), 0))
-            FROM returns ret WHERE ret.return_date = ?
-        """, (target_date,))
-        returns_paid = max(0.0, safe_float(c.fetchone()[0] or 0))
-        
-        c.execute("SELECT COALESCE(SUM(amount), 0) FROM installments WHERE date_time LIKE ?", (f"{target_date} %",))
-        installments_today = safe_float(c.fetchone()[0])
-        
-        try:
-            c.execute("SELECT COALESCE(SUM(refund), 0) FROM returns WHERE return_date = ?", (target_date,))
-            refunds = safe_float(c.fetchone()[0])
-        except:
-            c.execute("SELECT COALESCE(SUM(ABS(balance)), 0) FROM returns WHERE return_date = ? AND balance < 0", (target_date,))
-            refunds = safe_float(c.fetchone()[0])
-        
-        return (advances + returns_paid + installments_today) - refunds
+        # Same money-in / money-out rules as the Daily Report, so both screens always agree
+        s = self.get_transaction_splits(target_date, target_date)
+        return (s['gpay_in'] + s['cash_in']) - (s['gpay_out'] + s['cash_out'])
 
     def get_transaction_splits(self, start_str, end_str):
         conn = self.db.get_connection()
@@ -214,7 +194,10 @@ class AnalyticsDashboard:
                 actual_final_payment = max(0.0, total_paid_db - inst_sum)
                 
                 mode = str(r["payment_mode"]).lower()
-                refund_amt = safe_float(r["refund"]) if "refund" in r.keys() else 0.0
+                # Refunds logged via refunds_history are counted on their own date below; only the legacy remainder belongs to the return date
+                refund_db = safe_float(r["refund"]) if "refund" in r.keys() else 0.0
+                c2.execute("SELECT SUM(amount) FROM refunds_history WHERE rental_id=?", (r['rental_id'],))
+                refund_amt = max(0.0, refund_db - safe_float(c2.fetchone()[0]))
                 is_gpay = mode in ['gpay', 'upi', 'phonepe', 'online']
                 
                 if actual_final_payment > 0:
@@ -233,7 +216,16 @@ class AnalyticsDashboard:
                 amt = safe_float(r['amount'])
                 if str(r['payment_mode']).lower() in ['gpay', 'upi', 'phonepe', 'online']: gpay_in += amt
                 else: cash_in += amt
-                
+
+        c.execute("SELECT date_time, amount, payment_mode FROM refunds_history")
+        for r in c.fetchall():
+            parts = (r['date_time'] or '').split(' ', 1)
+            rdt = parse_dt(parts[0], parts[1] if len(parts) > 1 else "12:00 AM")
+            if start_dt <= rdt <= end_dt:
+                amt = safe_float(r['amount'])
+                if str(r['payment_mode']).lower() in ['gpay', 'upi', 'phonepe', 'online']: gpay_out += amt
+                else: cash_out += amt
+
         return {'gpay_in': gpay_in, 'gpay_out': gpay_out, 'cash_in': cash_in, 'cash_out': cash_out}
 
     def get_stock_status(self):

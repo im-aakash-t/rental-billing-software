@@ -3,10 +3,11 @@ import os
 import sys
 import sqlite3
 import webbrowser
-import textwrap
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.lib.utils import simpleSplit
 from bill_number import generate_next_bill_no
 from utils import safe_float, safe_int, sync_lists, validate_phone, validate_date, validate_time, sanitize_sql_input
 from materials import get_material_by_code
@@ -250,15 +251,132 @@ def get_record_by_id(identifier, db):
     except Exception as e:
         raise BillingError(f"Failed to get record: {e}")
 
-def generate_bill(bill_no, date, time, address, phone, items, qty, rent, total, advance, 
+# --- BILL TEMPLATE LAYOUT ---
+# Measured from Estimate-Bill.png / Tax-Invoice.png (both share the same body layout).
+# All values are in PDF points; y is measured from the TOP of the A4 page.
+_FONT = "Helvetica"
+_FONT_BOLD = "Helvetica-Bold"
+_BASELINE_GAP = 2.5          # text baseline sits this far above a dotted line
+
+# Single-line fields: (x_left, x_right, dotted_line_y)
+_FIELDS = {
+    "bill_no":     (103.0, 189.0, 218.5),
+    "date":        (445.0, 527.0, 218.5),
+    "time":        (447.0, 529.0, 251.8),
+    "phone":       (115.0, 330.0, 387.4),
+    "vehicle":     (395.0, 530.0, 387.4),
+    "return_date": (172.0, 228.0, 760.4),
+    "return_time": (114.0, 227.0, 779.7),
+}
+
+# Name + address: one dotted line per entry
+_ADDRESS_X = (100.0, 530.0)
+_ADDRESS_LINES_Y = (286.0, 311.6, 337.1, 362.5)
+
+# Items table columns: (x_left, x_right)
+_COLS = {
+    "sno":     (56.6, 106.5),
+    "item":    (106.5, 270.0),
+    "qty":     (270.0, 335.9),
+    "rent":    (335.9, 408.4),
+    "total":   (408.4, 465.9),
+    "advance": (465.9, 535.0),
+}
+_TABLE_BODY = (444.0, 611.0)  # (top, bottom) of the item rows area
+_CELL_PAD = 4.0
+# A bill has at most 5 items, so rows are spread to fill the table
+_ITEM_FONT = 12.0
+_MAX_ROW_H = 32.0             # row height cap (5 plain rows fill the table)
+_SPARE_H = 10.5               # extra height for the "(WITH SPARE)" tag
+_NOTE_H = 14.0                # height per deduction / damage line
+
+
+def _format_amount(value):
+    """Indian digit grouping (1,25,000). Shows paise only when present."""
+    v = round(abs(safe_float(value)), 2)
+    whole = int(v)
+    paise = int(round((v - whole) * 100))
+    s = str(whole)
+    if len(s) > 3:
+        head, tail = s[:-3], s[-3:]
+        groups = []
+        while len(head) > 2:
+            groups.insert(0, head[-2:])
+            head = head[:-2]
+        if head:
+            groups.insert(0, head)
+        s = ",".join(groups + [tail])
+    if paise:
+        s += f".{paise:02d}"
+    return ("-" if safe_float(value) < 0 else "") + s
+
+
+def _money(value):
+    return f"Rs. {_format_amount(value)}"
+
+
+def _fit_text(text, max_w, font, size, min_size):
+    """Shrink font until text fits max_w; truncate with '..' as a last resort."""
+    text = str(text)
+    while size > min_size and stringWidth(text, font, size) > max_w:
+        size -= 0.5
+    if stringWidth(text, font, size) > max_w:
+        while text and stringWidth(text + "..", font, size) > max_w:
+            text = text[:-1]
+        text = text.rstrip() + ".."
+    return text, size
+
+
+def _draw_text(c, text, x_left, x_right, y_top, align="left",
+               font=_FONT, size=11, min_size=7):
+    """Draw text inside a horizontal box [x_left, x_right] with its baseline at y_top."""
+    text = "" if text is None else str(text).strip()
+    if not text:
+        return
+    text, size = _fit_text(text, x_right - x_left, font, size, min_size)
+    c.setFont(font, size)
+    y = A4[1] - y_top
+    if align == "right":
+        c.drawRightString(x_right, y, text)
+    elif align == "center":
+        c.drawCentredString((x_left + x_right) / 2, y, text)
+    else:
+        c.drawString(x_left, y, text)
+
+
+def _draw_field(c, key, text, size=11, min_size=7, font=_FONT):
+    x_left, x_right, line_y = _FIELDS[key]
+    _draw_text(c, text, x_left, x_right, line_y - _BASELINE_GAP,
+               font=font, size=size, min_size=min_size)
+
+
+def _address_lines(name_str, address, max_w, max_lines):
+    """Wrap name + address to the dotted lines, shrinking the font if needed."""
+    paras = [p.strip() for p in str(address or "").split("\n") if p.strip()]
+    for size in (11, 10, 9, 8):
+        lines = [name_str] if name_str else []
+        for para in paras:
+            lines.extend(simpleSplit(para, _FONT, size, max_w))
+        if len(lines) <= max_lines:
+            return lines, size
+    # Still too long at the smallest size: merge the overflow into the last line
+    # (it gets truncated with '..' when drawn).
+    head = lines[:max_lines - 1]
+    tail = " ".join(lines[max_lines - 1:])
+    return head + [tail], 8
+
+
+def generate_bill(bill_no, date, time, address, phone, items, qty, rent, total, advance,
                   rental_days=1, background_path="bill-layout.jpg", output_pdf=None,
                   return_date=None, return_time=None, vehicle="", name="", payment_mode="",
                   deduction=0.0, damage=0.0):
-    """Generate bill PDF with perfectly aligned coordinates."""
+    """Generate bill PDF by overlaying data on the template image (layout constants above)."""
     try:
         if output_pdf is None:
             output_pdf = os.path.join(REPORTS_DIR, f"{bill_no}.pdf")
-        os.makedirs(REPORTS_DIR, exist_ok=True)
+        out_dir = os.path.dirname(output_pdf)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
 
         c = canvas.Canvas(output_pdf, pagesize=A4)
         width, height = A4
@@ -275,14 +393,13 @@ def generate_bill(bill_no, date, time, address, phone, items, qty, rent, total, 
             raise BillingError(f"Background image not found: {background_path}")
 
         c.drawImage(background_path, 0, 0, width=width, height=height)
-        c.setFont("Helvetica", 12)
 
-        # --- HEADER ALIGNMENT ---
-        c.drawString(110, height - 215, str(bill_no))
-        c.drawString(450, height - 215, str(date))
-        c.drawString(450, height - 248, str(time))
+        # --- HEADER ---
+        _draw_field(c, "bill_no", bill_no)
+        _draw_field(c, "date", date)
+        _draw_field(c, "time", time)
 
-        # --- NEW: NAME & ADDRESS ALIGNMENT ---
+        # --- NAME & ADDRESS ---
         # Check if customer is regular to print star symbol near name
         is_regular = False
         if phone:
@@ -301,86 +418,132 @@ def generate_bill(bill_no, date, time, address, phone, items, qty, rent, total, 
             except Exception:
                 pass
 
-        address_lines = []
-        if name:
-            name_str = str(name)
-            if is_regular:
-                name_str += " *"
-            address_lines.append(name_str) # Name becomes Line 1
-            
-        for para in str(address).split('\n'):
-            address_lines.extend(textwrap.wrap(para, width=55))
+        name_str = str(name).strip() if name else ""
+        if name_str and is_regular:
+            name_str += " *"
 
-        start_y = height - 280
-        line_height = 27
-        for i, line in enumerate(address_lines):
-            if i > 4: break # Increased to 4 to allow room for the Name + Address
-            c.drawString(110, start_y - i*line_height, line.strip())
+        addr_x0, addr_x1 = _ADDRESS_X
+        address_lines, addr_size = _address_lines(name_str, address, addr_x1 - addr_x0,
+                                                  len(_ADDRESS_LINES_Y))
+        for line, line_y in zip(address_lines, _ADDRESS_LINES_Y):
+            _draw_text(c, line, addr_x0, addr_x1, line_y - _BASELINE_GAP,
+                       size=addr_size, min_size=7)
 
-        # --- PHONE & VEHICLE ALIGNMENT ---
-        c.drawString(130, height - 384, str(phone))
+        # --- PHONE & VEHICLE ---
+        _draw_field(c, "phone", phone)
         if vehicle:
-            c.drawString(400, height - 384, f"{vehicle}") 
+            _draw_field(c, "vehicle", vehicle)
 
-        # --- ITEMS TABLE ALIGNMENT ---
-        y = height - 460 # Start height for the first item
-        
-        target_len = max(len(items), len(qty), len(rent))
-        items += [""] * (target_len - len(items))
-        qty += [0] * (target_len - len(qty))
-        rent += [0.0] * (target_len - len(rent))
-        
-        for i in range(len(items)):
-            item_name = str(items[i]).strip()
-            if len(item_name) <= 1 and qty[i] <= 0:
+        # --- ITEMS TABLE ---
+        rows = []
+        for i in range(max(len(items), len(qty), len(rent))):
+            item_name = str(items[i]).strip() if i < len(items) else ""
+            q = safe_int(qty[i]) if i < len(qty) else 0
+            r = safe_float(rent[i]) if i < len(rent) else 0.0
+            if not item_name or (len(item_name) <= 1 and q <= 0):
                 continue
-            if not item_name: continue
-
-            has_spare = False
-            if item_name.lower().endswith(" (with spare)"):
-                item_name = item_name[:-13].strip()
-                has_spare = True
-
-            # Truncate long names to prevent overlap
-            display_name = (item_name[:28] + '..') if len(item_name) > 30 else item_name
-
-            c.drawString(75, y, str(i + 1))                                # S.No
-            c.drawString(110, y, display_name)                             # Item Name
-            c.drawString(300, y, str(qty[i]))                              # Quantity
-            c.drawString(360, y, str(int(safe_float(rent[i]))))            # Rent/Amount
-            
+            has_spare = item_name.lower().endswith(" (with spare)")
             if has_spare:
-                c.setFont("Helvetica-Bold", 9)
-                c.drawString(110, y - 13, "(WITH SPARE)")
-                c.setFont("Helvetica", 12)
-                y -= 38
-            else:
-                y -= 25 # Spacing between rows
+                item_name = item_name[:-13].strip()
+            rows.append((item_name, q, r, has_spare))
 
-        # --- FIXED TOTALS ALIGNMENT ---
-        # Fixed Y coordinate so the totals don't slide down with extra items
-        totals_base_y = height - 485 
-        
-        c.drawString(410, totals_base_y - 20, f"Rs.{int(safe_float(total))}")   # Total
-        c.drawString(480, totals_base_y - 20, f"Rs.{int(safe_float(advance))}") # Advance
-        
-        c.setFont("Helvetica-Bold", 11)
+        notes = []
         if safe_float(deduction) > 0:
-            c.drawString(130, totals_base_y - 100, f"Deduction: Rs.{int(safe_float(deduction))}")
+            notes.append(f"Deduction: {_money(deduction)}")
         if safe_float(damage) > 0:
-            c.drawString(130, totals_base_y - 120, f"Damage Cost: Rs.{int(safe_float(damage))}")
-        c.setFont("Helvetica", 12)
-        
-        if payment_mode:
-            c.setFont("Helvetica-Bold", 10)
-            c.drawString(480, totals_base_y - 5, f"{str(payment_mode).upper()}:")
-            c.setFont("Helvetica", 12)
+            notes.append(f"Damage Cost: {_money(damage)}")
 
-        # --- RETURN DATES ALIGNMENT ---
+        body_top, body_bottom = _TABLE_BODY
+        notes_h = len(notes) * _NOTE_H
+        avail_h = (body_bottom - body_top) - notes_h - (4 if notes else 0)
+        n_rows = len(rows)
+        ix0, ix1 = _COLS["item"]
+        name_w = ix1 - ix0 - 2 * _CELL_PAD
+
+        def name_lines(name, size):
+            """Wrap a long item name onto two lines, shrinking slightly if needed."""
+            for s in (size, size - 1, size - 2):
+                lines = simpleSplit(name, _FONT, s, name_w)
+                if len(lines) <= 2:
+                    return lines or [name], s
+            return lines[:1] + [" ".join(lines[1:])], size - 2
+
+        def extra_height(lines, name_size, has_spare):
+            return (name_size * 1.1 if len(lines) > 1 else 0) + (spare_h if has_spare else 0)
+
+        font_size, spare_h = _ITEM_FONT, _SPARE_H
+        names = [name_lines(r[0], font_size) for r in rows]
+        extras = [extra_height(l, s, r[3]) for (l, s), r in zip(names, rows)]
+        row_h = min(_MAX_ROW_H, (avail_h - sum(extras)) / n_rows) if n_rows else _MAX_ROW_H
+        if row_h < font_size * 1.3:
+            # Not enough room to wrap names: keep the font, fit each name on one line
+            names = [([r[0]], font_size) for r in rows]
+            extras = [extra_height(l, s, r[3]) for (l, s), r in zip(names, rows)]
+            row_h = min(_MAX_ROW_H, (avail_h - sum(extras)) / n_rows)
+        if row_h < font_size * 1.3:
+            # Safety net for unusually many items: single-line names, smaller font,
+            # rows sized from the font so lines (and the spare tag) never touch.
+            n_spare = sum(1 for *_, s in rows if s)
+            font_size = max(6.0, min(_ITEM_FONT, avail_h / (n_rows * 1.45 + n_spare * 0.95)))
+            spare_h = font_size * 0.95
+            names = [([r[0]], font_size) for r in rows]
+            extras = [extra_height(l, s, r[3]) for (l, s), r in zip(names, rows)]
+            row_h = max(font_size * 1.45, (avail_h - sum(extras)) / n_rows)
+        tag_size = min(9.0, font_size * 0.75)
+
+        # Baseline of the first row; text is optically centred in a row
+        first_baseline = body_top + row_h * 0.5 + font_size * 0.35 + 2
+        y = first_baseline
+        row_limit = body_top + avail_h            # last allowed baseline
+        for n, ((item_name, q, r, has_spare), (lines, name_size), extra) in enumerate(
+                zip(rows, names, extras), start=1):
+            row_bottom = y + extra
+            if row_bottom > row_limit or (n < n_rows and row_bottom + row_h > row_limit):
+                # No room for this row plus another: use this slot for an overflow note
+                _draw_text(c, f"+ {n_rows - n + 1} more items", ix0 + _CELL_PAD, ix1 - _CELL_PAD,
+                           y, font=_FONT_BOLD, size=font_size, min_size=6)
+                break
+            _draw_text(c, n, *_COLS["sno"], y, align="center", size=font_size)
+            line_y = y
+            for k, line in enumerate(lines):
+                line_y = y + k * name_size * 1.1
+                _draw_text(c, line, ix0 + _CELL_PAD, ix1 - _CELL_PAD, line_y,
+                           size=name_size, min_size=min(name_size, 8))
+            qx0, qx1 = _COLS["qty"]
+            _draw_text(c, q, qx0 + _CELL_PAD, qx1 - _CELL_PAD, y, align="center", size=font_size)
+            rx0, rx1 = _COLS["rent"]
+            _draw_text(c, _format_amount(r), rx0 + _CELL_PAD, rx1 - _CELL_PAD, y,
+                       align="right", size=font_size)
+            if has_spare:
+                _draw_text(c, "(WITH SPARE)", ix0 + _CELL_PAD, ix1 - _CELL_PAD,
+                           line_y + name_size * 0.25 + tag_size * 0.8, font=_FONT_BOLD,
+                           size=tag_size, min_size=tag_size)
+            y += extra + row_h
+
+        # Deduction / damage notes sit at the bottom of the item column
+        for k, note in enumerate(notes):
+            note_y = body_bottom - (len(notes) - 1 - k) * _NOTE_H - 4
+            _draw_text(c, note, ix0 + _CELL_PAD, ix1 - _CELL_PAD, note_y,
+                       font=_FONT_BOLD, size=10.5, min_size=7)
+
+        # --- TOTAL & ADVANCE (aligned with the first item row, same font size) ---
+        tx0, tx1 = _COLS["total"]
+        ax0, ax1 = _COLS["advance"]
+        total_txt, advance_txt = _money(total), _money(advance)
+        amt_size = min(_fit_text(total_txt, tx1 - tx0 - 6, _FONT, 11.5, 7)[1],
+                       _fit_text(advance_txt, ax1 - ax0 - 6, _FONT, 11.5, 7)[1])
+        _draw_text(c, total_txt, tx0 + 3, tx1 - 3, first_baseline,
+                   align="right", size=amt_size, min_size=7)
+        _draw_text(c, advance_txt, ax0 + 3, ax1 - 3, first_baseline,
+                   align="right", size=amt_size, min_size=7)
+        if payment_mode:
+            _draw_text(c, str(payment_mode).upper(), ax0 + 3, ax1 - 3, first_baseline + 12,
+                       align="right", font=_FONT_BOLD, size=8, min_size=6)
+
+        # --- RETURN DATE / TIME ---
         if return_date and return_time:
-            c.setFont("Helvetica", 10)
-            c.drawString(180, 85, f"{return_date}")
-            c.drawString(130, 65, f"{return_time}")
+            _draw_field(c, "return_date", return_date, size=10, min_size=7)
+            _draw_field(c, "return_time", return_time, size=10, min_size=7)
 
         c.save()
         try:
