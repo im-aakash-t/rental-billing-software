@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rental Billing Software v2.0</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script>
+    window.APP_TOKEN = "__APP_TOKEN__";
+    try {
+      var t = localStorage.getItem("theme");
+      if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <div id="app" v-cloak></div>
+  <script src="/static/vendor/vue.global.prod.js"></script>
+  <script src="/static/logic.js"></script>
+  <script src="/static/core.js"></script>
+  <script src="/static/billing.js"></script>
+  <script src="/static/pages.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

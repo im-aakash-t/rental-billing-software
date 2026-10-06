@@ -24,8 +24,21 @@ DB_FILE = os.path.join(BASE_DIR, 'rentals.db')
 ID_FOLDER = os.path.join(BASE_DIR, 'ID_Proofs')
 CLOUD_ID_FOLDER = 'Rental_ID_Proofs' # Name of folder in Google Drive
 
+# Optional hook so a non-Tkinter UI (the web UI) can receive these messages.
+# When unset, messages go to Tkinter messageboxes exactly as before.
+_notifier = None
+
+def set_notifier(fn):
+    """Register fn(msg_type, title, message) to receive backup messages."""
+    global _notifier
+    _notifier = fn
+
 def show_message(msg_type, title, message):
     """Safely triggers Tkinter messageboxes from a background thread."""
+    if _notifier:
+        try: _notifier(msg_type, title, message)
+        except Exception: pass
+        return
     try:
         root = tk._default_root
         if root:

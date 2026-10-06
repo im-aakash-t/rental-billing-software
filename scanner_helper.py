@@ -3,10 +3,14 @@ import os
 import win32com.client
 from tkinter import messagebox
 
-def scan_and_save_id(bill_no, name, id_type):
+def scan_id_image(bill_no, name, id_type):
     """
-    Connects to the Windows Scanner, scans the document, 
+    Connects to the Windows Scanner, scans the document,
     and saves it to the ID_Proofs folder.
+
+    UI-free core shared by the Tkinter and web interfaces.
+    Returns (status, value):
+      ("saved", (save_path, filename)) | ("cancelled", None) | ("error", exception)
     """
     # 1. Create the Master Folder if it doesn't exist
     import sys
@@ -21,7 +25,7 @@ def scan_and_save_id(bill_no, name, id_type):
     safe_bill = "".join([c for c in str(bill_no) if c.isalnum() or c in "-_ "]).strip()
     safe_name = "".join([c for c in str(name) if c.isalnum() or c in "-_ "]).strip()
     safe_type = "".join([c for c in str(id_type) if c.isalnum() or c in "-_ "]).strip()
-    
+
     if not safe_bill: safe_bill = "PendingBill"
     if not safe_name: safe_name = "UnknownCustomer"
     if not safe_type: safe_type = "ID"
@@ -37,27 +41,36 @@ def scan_and_save_id(bill_no, name, id_type):
     try:
         # 5. Summon the Windows Scanner Interface
         wia = win32com.client.Dispatch("WIA.CommonDialog")
-        
+
         # This opens the scanner popup. It pauses the app until the user hits "Scan"
         image = wia.ShowAcquireImage()
-        
+
         if image is not None:
             # Save the file
             image.SaveFile(save_path)
-            messagebox.showinfo("Scan Successful! 🎉", f"ID Proof saved securely as:\n{filename}")
-            return save_path
+            return "saved", (save_path, filename)
         else:
-            return None
-            
+            return "cancelled", None
+
     except Exception as e:
         error_msg = str(e)
         # 80210015 is the Windows error code for "User clicked Cancel" or "Scanner unplugged"
         if "80210015" in error_msg or "cancelled" in error_msg.lower():
             print("Scan cancelled by user.")
-        else:
-            messagebox.showerror("Scanner Error ⚠️", 
-                                 f"Could not connect to the scanner.\n\n"
-                                 f"1. Check if the scanner is plugged in and turned on.\n"
-                                 f"2. Check if Windows recognizes the scanner.\n\n"
-                                 f"Technical Error: {e}")
-        return None
+            return "cancelled", None
+        return "error", e
+
+def scan_and_save_id(bill_no, name, id_type):
+    """Tkinter wrapper around scan_id_image (shows messageboxes)."""
+    status, value = scan_id_image(bill_no, name, id_type)
+    if status == "saved":
+        save_path, filename = value
+        messagebox.showinfo("Scan Successful! 🎉", f"ID Proof saved securely as:\n{filename}")
+        return save_path
+    if status == "error":
+        messagebox.showerror("Scanner Error ⚠️",
+                             f"Could not connect to the scanner.\n\n"
+                             f"1. Check if the scanner is plugged in and turned on.\n"
+                             f"2. Check if Windows recognizes the scanner.\n\n"
+                             f"Technical Error: {value}")
+    return None
