@@ -15,7 +15,7 @@ from shared_imports import (
     DBManager, validate_form, save_form_data, update_form_data, get_record_by_id,
     has_return_entry, has_pending_returns, cancel_rental, generate_next_bill_no,
     calculate_master_balance, calculate_rental_days_unified,
-    get_regular_customer_phones, get_customer_history, backup_files,
+    get_regular_customer_phones, get_customer_history,
 )
 from billing import generate_bill
 from return_logic import (
@@ -343,11 +343,6 @@ def print_bill(db, bill_no, image_path="bill-layout.jpg"):
         return True
     except Exception as e:
         raise UserError("Print Error", f"Failed: {e}")
-
-
-def start_cloud_backup(db=None):
-    backup_files()
-    return True
 
 
 # ---------------------------------------------------------------------------

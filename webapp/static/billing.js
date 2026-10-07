@@ -562,7 +562,10 @@ const BillingPage = {
       if (!selectedBill.value) { await alertBox("warning", "Error", "No record selected"); return; }
       await run("print_bill", { bill_no: selectedBill.value, image_path: image });
     }
-    async function backup() { await run("cloud_backup"); }
+    async function backup() {
+      // "Sync": upload this computer's changes to the cloud now (Supabase is the backup)
+      if ((await run("sync_now")) !== FAIL) toast("info", "Syncing", "Uploading changes to the cloud…", 3000);
+    }
 
     // ---------------------------------------------------------------- records table
     const filt = reactive({ search: "", status: "all", from_date: "", to_date: "", from_bill: "", to_bill: "" });
@@ -736,7 +739,7 @@ const BillingPage = {
             <button class="btn danger" @click="cancelRental"><Icon name="ban" size="sm"/>Cancel</button>
             <button class="btn" @click="printBill('Estimate-Bill.png')"><Icon name="file" size="sm"/>Estimate</button>
             <button class="btn" @click="printBill('Tax-Invoice.png')"><Icon name="receipt" size="sm"/>Tax Inv.</button>
-            <button class="btn" @click="backup"><Icon name="cloud" size="sm"/>Backup</button>
+            <button class="btn" @click="backup" title="Upload to the cloud now (Ctrl+B)"><Icon name="cloud" size="sm"/>Sync</button>
           </div>
         </div>
       </div>

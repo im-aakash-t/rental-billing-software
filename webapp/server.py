@@ -70,14 +70,15 @@ class Backend:
         """Same as on_closing() in main.py once the user confirmed."""
         if self.db is None:
             return
+        if self.engine is not None:
+            try:
+                self.engine.stop()
+                self.engine.sync_once()      # last upload before closing (quick no-op when offline)
+            except Exception as e:
+                print(f"Final cloud sync skipped: {e}")
         def _close(db):
             try:
                 db.backup_database()
-                try:
-                    from drive_backup import backup_files
-                    backup_files(silent=True)
-                except Exception as e:
-                    print(f"Cloud backup skipped: {e}")
                 db.close()
             except Exception as e:
                 print(f"[ERROR] During shutdown: {e}")
@@ -99,12 +100,6 @@ def _ensure_db():
         db, warning = backend.run(services.initialize_database)
         backend.db = db
         backend.db_warning = warning
-        try:
-            from drive_backup import backup_files
-            backup_files(silent=True)
-            print("☁️ Background Smart Sync triggered on startup.")
-        except Exception as e:
-            print(f"Startup sync skipped: {e}")
 
 
 def _persist_refresh_token(token):
@@ -358,7 +353,7 @@ API = {
     "status": lambda: D(services.status_counts),
     "notes": backend.take_notes,
     "quit": _quit,
-    "cloud_backup": lambda: services.start_cloud_backup(),
+    "cloud_backup": lambda: _sync_now(),           # the old "Backup" action now syncs to Supabase
     # outward billing form
     "next_bill_no": lambda: D(services.next_bill_no),
     "outward_table": lambda **p: D(services.outward_table, **p),
@@ -467,11 +462,6 @@ def main(open_window=True):
         except Exception:
             pass
     print("🚀 Starting Rental Billing Software v2.0...")
-    try:
-        from drive_backup import set_notifier
-        set_notifier(backend.notify)
-    except Exception as e:
-        print(f"[WARN] Cloud backup messages unavailable: {e}")
 
     server = start_server()
     url = f"http://127.0.0.1:{server.server_port}/"

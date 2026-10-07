@@ -260,7 +260,6 @@ const Shell = {
             <option v-for="(name, code) in store.branches" :key="code" :value="code">{{ name }} ({{ code }})</option>
           </select>
         </div>
-        <button v-if="!isWeb" class="side-btn" @click="quickBackup" title="Back up to Google Drive (Ctrl+B)"><Icon name="cloud" size="sm"/><span>Drive Backup</span><kbd>Ctrl B</kbd></button>
         <div class="side-row">
           <button class="side-btn" @click="toggleTheme" :title="store.theme === 'dark' ? 'Light mode' : 'Dark mode'"><Icon :name="store.theme === 'dark' ? 'sun' : 'moon'" size="sm"/><span>{{ store.theme === 'dark' ? 'Light' : 'Dark' }}</span></button>
           <button class="side-btn" @click="signOut" title="Sign out (switch cashier)"><Icon name="user" size="sm"/><span>Sign out</span></button>
@@ -311,7 +310,9 @@ async function signOut() {
 
 // ------------------------------------------------------------------ app-wide actions
 function manualRefresh() { reloadAll(); }
-async function quickBackup() { await run("cloud_backup"); }
+async function quickBackup() {   // Ctrl+B: sync to the cloud now
+  if ((await run("sync_now")) !== FAIL) toast("info", "Syncing", "Uploading changes to the cloud…", 3000);
+}
 let quitOpen = false;
 async function requestQuit() {
   if (quitOpen) return;
@@ -341,7 +342,7 @@ window.addEventListener("keydown", (e) => {
 });
 document.addEventListener("contextmenu", (e) => { if (!(e.target.closest && e.target.closest("input, textarea"))) e.preventDefault(); });
 
-// Background messages (cloud backup) and the status bar counter (every 10 s, like main.py)
+// Background messages and the status bar counter (every 10 s, like main.py)
 setInterval(async () => {
   try { for (const n of await api("notes")) toast(n.kind, n.title, n.message); } catch (e) { /* ignore */ }
 }, 1500);
