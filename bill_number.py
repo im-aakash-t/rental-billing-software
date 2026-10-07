@@ -27,6 +27,53 @@ def increment_prefix(prefix: str) -> str:
     # All characters were 'Z', add new 'A' at beginning
     return "A" * (len(prefix) + 1)
 
+# Bills created on the phone/web app use their own series per branch
+# (e.g. VDV-M0001) so they can never clash with numbers a branch PC picks
+# while it is offline. PC numbering therefore never uses the "M" letter.
+MOBILE_SERIES = "M"
+
+
+def get_branch_code(cur) -> str:
+    """This PC's branch code (VDV/BMP/KVP) once cloud sync is set up, else ''."""
+    try:
+        cur.execute("SELECT value FROM sync_meta WHERE key = 'branch_code'")
+        row = cur.fetchone()
+        return str(row[0]).strip().upper() if row and row[0] else ""
+    except Exception:
+        return ""  # sync not set up: single-shop numbering exactly as before
+
+
+def _next_branch_bill_no(cur, branch: str) -> str:
+    """Next PC bill number for a branch, e.g. 'VDV-A3003'.
+
+    Looks back from the newest bill for this PC's own series: legacy numbers
+    without a branch (A3002, the main branch's old bills) or '<branch>-A....'.
+    Phone-series bills (VDV-M....) and other branches' bills are skipped.
+    """
+    cur.execute("""
+        SELECT bill_no FROM rentals
+        WHERE bill_no IS NOT NULL AND bill_no != ''
+        ORDER BY id DESC
+    """)
+    for (raw,) in cur.fetchall():
+        bill = str(raw).strip().upper()
+        if bill.startswith(branch + "-"):
+            bill = bill[len(branch) + 1:]
+        elif "-" in bill:
+            continue
+        match = re.match(r"^([A-Z]+)(\d{4})$", bill)
+        if not match or match.group(1) == MOBILE_SERIES:
+            continue
+        prefix, number = match.group(1), int(match.group(2)) + 1
+        if number > 9999:
+            prefix = increment_prefix(prefix)
+            if prefix == MOBILE_SERIES:
+                prefix = increment_prefix(prefix)
+            number = 1
+        return f"{branch}-{prefix}{number:04d}"
+    return f"{branch}-A0001"
+
+
 def generate_next_bill_no(db) -> str:
     """
     Scheme: PREFIX + 4-digit number (e.g., 'A0001'). Rolls over after 9999 → next prefix.
@@ -35,7 +82,12 @@ def generate_next_bill_no(db) -> str:
     try:
         conn = db.get_connection()
         cur = conn.cursor()
-        
+
+        # Multi-branch mode (cloud sync set up on this PC): "VDV-A3003" style numbers
+        branch = get_branch_code(cur)
+        if branch:
+            return _next_branch_bill_no(cur, branch)
+
         # Get the latest bill number with proper error handling
         cur.execute("""
             SELECT bill_no FROM rentals 
