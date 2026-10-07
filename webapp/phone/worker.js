@@ -1,7 +1,10 @@
 // worker.js - runs the app's Python (Pyodide) off the main thread for the phone/web version.
 /* global importScripts, loadPyodide */
 "use strict";
-const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/";
+// Inside the Android app the engine is bundled (pyodide/); on the web it comes from the CDN
+const PYODIDE = new URL(self.location.href).searchParams.get("pyodide") === "local"
+  ? new URL("pyodide/", self.location.href).href
+  : "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/";
 importScripts(PYODIDE + "pyodide.js");
 
 // Synchronous HTTP for Python (cloud/client.py -> _send_browser). Allowed inside workers.

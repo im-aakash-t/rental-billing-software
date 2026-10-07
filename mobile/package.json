@@ -1,0 +1,20 @@
+{
+  "name": "rental-billing-mobile",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Android app (Capacitor) wrapping the phone version of Rental Billing",
+  "scripts": {
+    "sync": "cap sync android"
+  },
+  "dependencies": {
+    "@capacitor-community/file-opener": "^6.0.0",
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/filesystem": "^6.0.0",
+    "@capacitor/share": "^6.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0",
+    "pyodide": "^0.27.7"
+  }
+}

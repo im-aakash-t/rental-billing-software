@@ -1,7 +1,9 @@
 // bridge.js - phone/web version: connects the UI to the Python worker (worker.js).
 "use strict";
 (function () {
-  const worker = new Worker("worker.js");
+  // Android app (Capacitor): engine bundled inside the app, files opened/shared natively
+  const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  const worker = new Worker(NATIVE ? "worker.js?pyodide=local" : "worker.js");
   const pending = new Map();
   let seq = 0;
 
@@ -13,7 +15,26 @@
     '<div class="wb-note">The first start can take up to a minute. After that it opens quickly.</div></div>';
   document.addEventListener("DOMContentLoaded", () => document.body.appendChild(boot));
 
+  async function nativeFile(f) {
+    // write to the app's cache, then offer Open (PDF viewer) and Share (WhatsApp, print, ...)
+    const P = window.Capacitor.Plugins;
+    const saved = await P.Filesystem.writeFile({ path: f.name, data: f.b64, directory: "CACHE" });
+    const card = document.createElement("div");
+    card.className = "pdf-ready";
+    card.innerHTML = '<div><b></b><small></small></div><button class="btn primary sm">Open</button>' +
+      '<button class="btn sm">Share</button><button class="btn ghost sm" aria-label="Close">✕</button>';
+    card.querySelector("b").textContent = f.mime === "text/csv" ? "File ready" : "PDF ready";
+    card.querySelector("small").textContent = f.name;
+    const [open, share, close] = card.querySelectorAll("button");
+    const fail = (e) => { if (typeof toast === "function") toast("error", "Could not open", String(e && e.message || e)); };
+    open.onclick = () => P.FileOpener.open({ filePath: saved.uri, contentType: f.mime, openWithDefault: true }).catch(fail);
+    share.onclick = () => P.Share.share({ title: f.name, url: saved.uri, dialogTitle: "Share " + f.name }).catch(() => {});
+    close.onclick = () => card.remove();
+    document.body.appendChild(card);
+  }
+
   function showFile(f) {
+    if (NATIVE) { nativeFile(f).catch((e) => typeof toast === "function" && toast("error", "File error", String(e))); return; }
     const bytes = Uint8Array.from(atob(f.b64), (c) => c.charCodeAt(0));
     const url = URL.createObjectURL(new Blob([bytes], { type: f.mime }));
     if (f.mime === "text/csv") {

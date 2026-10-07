@@ -15,13 +15,42 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "dist_phone")
+# Android app (Capacitor): the Python engine is bundled so the app needs no CDN
+NATIVE_OUT = os.path.join(ROOT, "mobile", "www")
+PYODIDE_NPM = os.path.join(ROOT, "mobile", "node_modules", "pyodide")
+PYODIDE_CDN = "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/"
+PYODIDE_CORE = ["pyodide.js", "pyodide.asm.js", "pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json"]
+PYODIDE_PACKAGES = ["sqlite3", "pillow", "micropip", "packaging"]
 # Same versions as the desktop app, so PDFs come out the same
 WHEELS = ["reportlab==4.3.1", "chardet==5.2.0"]
 PY_DIRS = ["", "webapp", "cloud"]
 SKIP_PY = {"main.spec"}
 
 
-def build():
+def bundle_pyodide(out):
+    """Copy the Pyodide engine + the packages the app loads into out/pyodide/."""
+    import json
+    import urllib.request
+    dest = os.path.join(out, "pyodide")
+    os.makedirs(dest)
+    for f in PYODIDE_CORE:
+        shutil.copy(os.path.join(PYODIDE_NPM, f), os.path.join(dest, f))
+    with open(os.path.join(PYODIDE_NPM, "pyodide-lock.json"), encoding="utf-8") as fh:
+        lock = json.load(fh)["packages"]
+    cache = os.path.join(ROOT, "build_web", "pyodide_pkgs")
+    os.makedirs(cache, exist_ok=True)
+    for name in PYODIDE_PACKAGES:
+        fname = lock[name]["file_name"]
+        cached = os.path.join(cache, fname)
+        if not os.path.exists(cached):
+            urllib.request.urlretrieve(PYODIDE_CDN + fname, cached)
+        shutil.copy(cached, os.path.join(dest, fname))
+
+
+def build(native=False):
+    global OUT
+    if native:
+        OUT = NATIVE_OUT
     if os.path.exists(OUT):
         shutil.rmtree(OUT)
     os.makedirs(os.path.join(OUT, "py"))
@@ -91,9 +120,12 @@ def build():
                 ' "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},'
                 ' {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"}]}')
 
+    if native:
+        bundle_pyodide(OUT)
+
     total = sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(OUT) for f in fs)
     print(f"Built {OUT}  (version {version}, {total / 1024 / 1024:.1f} MB, wheels: {', '.join(wheels)})")
 
 
 if __name__ == "__main__":
-    build()
+    build(native="--android" in sys.argv)
