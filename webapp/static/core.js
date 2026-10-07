@@ -2,6 +2,7 @@
 "use strict";
 const { createApp, reactive, ref, computed, watch, onMounted, onBeforeUnmount, nextTick } = Vue;
 const L = window.Logic;
+const IS_WEB = !!window.WebBridge;   // phone/web version (bridge.js loaded)
 
 // ------------------------------------------------------------------ helpers
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -43,7 +44,9 @@ const store = reactive({
   version: 0,              // bumped by reloadAll(); pages reload when it changes
   busy: 0,
   status: "Records: Loading...",
-  user: null,              // signed-in user: {username, display_name, role, branch, branch_name, offline}
+  user: null,
+  branches: null,          // {code: name} - offered to the owner (switch branch on the phone)
+  navOpen: false,          // phone: sidebar drawer open              // signed-in user: {username, display_name, role, branch, branch_name, offline}
   theme: document.documentElement.getAttribute("data-theme") || "light",
 });
 const materialMap = new Map();
@@ -72,6 +75,12 @@ class ApiError extends Error {
   constructor(err) { super(err.message); this.title = err.title || "Error"; this.kind = err.kind || "error"; }
 }
 async function api(method, params) {
+  if (window.WebBridge) {
+    // phone/web version: the same Python runs in a background worker (see bridge.js)
+    const data = await window.WebBridge.call(method, params || {});
+    if (!data.ok) throw new ApiError(data.error);
+    return data.result;
+  }
   const res = await fetch("/api/" + method, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-App-Token": window.APP_TOKEN },
@@ -178,6 +187,7 @@ const ICONS = {
   history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
   user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   layers: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+  menu: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
   flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
 };
 const Icon = {

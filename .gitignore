@@ -17,6 +17,7 @@ build/
 dist/
 build_web/
 dist_web/
+dist_phone/
 
 # Backups
 backups/

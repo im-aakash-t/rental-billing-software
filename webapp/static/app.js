@@ -114,7 +114,7 @@ const LoginView = {
   setup() {
     const user = ref(""), pwd = ref(""), error = ref(""), shake = ref(false), working = ref(false);
     const userInput = ref(null), pwdInput = ref(null);
-    const branchPick = reactive({ open: false, branches: {}, value: "" });
+    const branchPick = reactive({ open: false, branches: {}, value: "", phone: false });
     let lastUser = "";
     try { lastUser = localStorage.getItem("last_user") || ""; } catch (e) { /* ignore */ }
     user.value = lastUser;
@@ -124,9 +124,13 @@ const LoginView = {
       try {
         const r = await api("login", { username: user.value, password: pwd.value, branch: branch || null });
         if (r.choose_branch) {
-          branchPick.branches = r.branches; branchPick.value = r.suggested || Object.keys(r.branches)[0]; branchPick.open = true;
+          let last = ""; try { last = localStorage.getItem("last_branch") || ""; } catch (e) { /* ignore */ }
+          branchPick.branches = r.branches; branchPick.phone = !!r.phone;
+          branchPick.value = (last && r.branches[last]) ? last : (r.suggested || Object.keys(r.branches)[0]);
+          branchPick.open = true; store.branches = r.branches;
           return;
         }
+        try { localStorage.setItem("last_branch", r.branch); } catch (e) { /* ignore */ }
         try { localStorage.setItem("last_user", user.value.trim().toLowerCase()); } catch (e) { /* ignore */ }
         store.user = r; store.isOwner = r.role === "owner";
         await boot();
@@ -141,7 +145,7 @@ const LoginView = {
     }
     const exit = () => api("quit").catch(() => {});
     onMounted(() => { (lastUser ? pwdInput.value : userInput.value)?.focus(); });
-    return { user, pwd, error, shake, working, userInput, pwdInput, branchPick, submit, exit };
+    return { user, pwd, error, shake, working, userInput, pwdInput, branchPick, submit, exit, isWeb: IS_WEB };
   },
   template: `
   <div class="login">
@@ -159,21 +163,23 @@ const LoginView = {
       </div>
       <div v-if="error" class="form-error" style="margin-top:10px;white-space:pre-line">{{ error }}</div>
       <button class="btn primary" type="submit" :disabled="working">{{ working ? 'Signing in…' : 'Sign in' }}</button>
-      <div class="login-foot"><span>v2.0 · Works offline after first sign-in</span><button type="button" class="btn ghost sm" @click="exit"><Icon name="power" size="sm"/>Exit</button></div>
+      <div class="login-foot"><span>{{ isWeb ? 'v2.0 · All branches' : 'v2.0 · Works offline after first sign-in' }}</span><button v-if="!isWeb" type="button" class="btn ghost sm" @click="exit"><Icon name="power" size="sm"/>Exit</button></div>
     </form>
     <div v-else class="login-card">
       <div class="brand-mark"><Icon name="layers"/></div>
-      <h1>Set up this computer</h1>
-      <p class="lead">This is the first sign-in on this computer. Which branch's counter is it? Its bills will be numbered and synced for that branch.</p>
+      <h1>{{ branchPick.phone ? 'Open a branch' : 'Set up this computer' }}</h1>
+      <p v-if="branchPick.phone" class="lead">Which branch do you want to work on? You can switch later from the menu. Bills made here are numbered in the branch's phone series.</p>
+      <p v-else class="lead">This is the first sign-in on this computer. Which branch's counter is it? Its bills will be numbered and synced for that branch.</p>
       <div class="branch-pick">
         <label v-for="(name, code) in branchPick.branches" :key="code" class="branch-opt" :class="{ on: branchPick.value === code }">
           <input type="radio" :value="code" v-model="branchPick.value">
-          <span><b>{{ name }}</b><small>Bills: {{ code }}-A0001…</small></span>
+          <span><b>{{ name }}</b><small>{{ branchPick.phone ? 'Phone bills: ' + code + '-M0001…' : 'Bills: ' + code + '-A0001…' }}</small></span>
         </label>
       </div>
       <div v-if="error" class="form-error" style="margin-top:10px">{{ error }}</div>
-      <button class="btn primary" :disabled="working || !branchPick.value" @click="submit(branchPick.value)">{{ working ? 'Downloading this branch’s data… (can take a minute)' : 'Use this branch' }}</button>
-      <div class="login-foot"><span>You can't change this later from the app.</span><button type="button" class="btn ghost sm" @click="branchPick.open = false">Back</button></div>
+      <button class="btn primary" :disabled="working || !branchPick.value" @click="submit(branchPick.value)">
+        <template v-if="branchPick.phone">{{ working ? 'Opening… (the first time can take a minute)' : 'Open branch' }}</template><template v-else>{{ working ? 'Downloading this branch’s data… (can take a minute)' : 'Use this branch' }}</template></button>
+      <div class="login-foot"><span>{{ branchPick.phone ? '' : "You can't change this later from the app." }}</span><button type="button" class="btn ghost sm" @click="branchPick.open = false">Back</button></div>
     </div>
   </div>`,
 };
@@ -215,11 +221,24 @@ const Shell = {
     });
     const syncTitle = computed(() => sync.error ? sync.error + " — click to retry" : "Click to sync now");
     const syncNow = () => api("sync_now").then(() => setTimeout(pollSync, 1500)).catch(() => {});
-    return { store, tabs, current, visited, toggleTheme, manualRefresh, quickBackup, requestQuit, signOut,
+    async function switchBranch(code) {
+      if (!store.user || code === store.user.branch) return;
+      store.navOpen = false;
+      const r = await run("switch_branch", { branch: code });
+      if (r === FAIL) return;
+      try { localStorage.setItem("last_branch", code); } catch (e) { /* ignore */ }
+      store.user = r;
+      await boot();
+      reloadAll();
+      if (window.BillingActions) window.BillingActions.clear();
+      toast("success", "Branch opened", `Now showing ${r.branch_name}.`);
+    }
+    return { store, tabs, current, visited, toggleTheme, manualRefresh, quickBackup, requestQuit, signOut, switchBranch, isWeb: IS_WEB,
              syncTone, syncLabel, syncSub, syncTitle, syncNow };
   },
   template: `
-  <div class="shell">
+  <div class="shell" :class="{ 'nav-open': store.navOpen }">
+    <div class="nav-scrim" @click="store.navOpen = false"></div>
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark"><Icon name="receipt"/></div>
@@ -227,7 +246,7 @@ const Shell = {
       </div>
       <nav class="nav">
         <div class="nav-label">Workspace</div>
-        <button v-for="t in tabs" :key="t.id" class="nav-item" :class="{ active: store.tab === t.id }" @click="store.tab = t.id" :title="t.label">
+        <button v-for="t in tabs" :key="t.id" class="nav-item" :class="{ active: store.tab === t.id }" @click="store.tab = t.id; store.navOpen = false" :title="t.label">
           <Icon :name="t.icon"/><span>{{ t.label }}</span><em v-if="t.owner" class="badge-owner" title="Owner only"><Icon name="lock" size="sm"/></em>
         </button>
       </nav>
@@ -235,17 +254,24 @@ const Shell = {
         <button class="sync-pill" :class="syncTone" @click="syncNow" :title="syncTitle">
           <span class="sync-dot"></span><span class="sync-text"><b>{{ syncLabel }}</b><small>{{ syncSub }}</small></span>
         </button>
-        <button class="side-btn" @click="quickBackup" title="Back up to Google Drive (Ctrl+B)"><Icon name="cloud" size="sm"/><span>Drive Backup</span><kbd>Ctrl B</kbd></button>
+        <div v-if="isWeb && store.isOwner && store.branches" class="branch-switch">
+          <label>Branch</label>
+          <select class="select" :value="store.user && store.user.branch" @change="switchBranch($event.target.value)">
+            <option v-for="(name, code) in store.branches" :key="code" :value="code">{{ name }} ({{ code }})</option>
+          </select>
+        </div>
+        <button v-if="!isWeb" class="side-btn" @click="quickBackup" title="Back up to Google Drive (Ctrl+B)"><Icon name="cloud" size="sm"/><span>Drive Backup</span><kbd>Ctrl B</kbd></button>
         <div class="side-row">
           <button class="side-btn" @click="toggleTheme" :title="store.theme === 'dark' ? 'Light mode' : 'Dark mode'"><Icon :name="store.theme === 'dark' ? 'sun' : 'moon'" size="sm"/><span>{{ store.theme === 'dark' ? 'Light' : 'Dark' }}</span></button>
           <button class="side-btn" @click="signOut" title="Sign out (switch cashier)"><Icon name="user" size="sm"/><span>Sign out</span></button>
-          <button class="side-btn" @click="requestQuit" title="Quit (Ctrl+Q)"><Icon name="power" size="sm"/><span>Quit</span></button>
+          <button v-if="!isWeb" class="side-btn" @click="requestQuit" title="Quit (Ctrl+Q)"><Icon name="power" size="sm"/><span>Quit</span></button>
         </div>
         <div class="db-status"><div><span class="dot"></span>Database: Connected</div><div class="muted">{{ store.status }}</div><div class="muted">v2.0 · Rental Billing System</div></div>
       </div>
     </aside>
     <main class="main">
       <header class="topbar">
+        <button class="btn ghost icon-only menu-btn" @click="store.navOpen = true" aria-label="Menu"><Icon name="menu"/></button>
         <div><h1>{{ current.title }}</h1><div class="subtitle">{{ current.sub }}</div></div>
         <span class="spacer"></span>
         <button class="btn" @click="manualRefresh" title="Refresh all data (F5)"><Icon name="refresh" size="sm"/>Refresh Data<kbd>F5</kbd></button>
@@ -275,6 +301,7 @@ async function pollSync() {
   } catch (e) { /* ignore */ }
 }
 setInterval(pollSync, 4000);
+if (IS_WEB) setInterval(() => { if (store.phase === "app") api("sync_now").catch(() => {}); }, 60000);
 async function signOut() {
   const ok = await confirmBox("Sign out", "Sign out so another cashier can sign in?", { okText: "Sign out", cancelText: "Cancel" });
   if (!ok) return;

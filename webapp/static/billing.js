@@ -487,12 +487,30 @@ const BillingPage = {
     const hideSug = () => setTimeout(() => { sug.open = ""; }, 150);
 
     // ---------------------------------------------------------------- scanner
+    const camera = ref(null);
+    async function onPhoto(ev) {
+      const file = ev.target.files && ev.target.files[0];
+      ev.target.value = "";
+      if (!file) return;
+      scanStatus.value = "scanning";
+      const b64 = await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(String(fr.result).split(",")[1]);
+        fr.onerror = rej;
+        fr.readAsDataURL(file);
+      });
+      const r = await run("upload_id_photo", { bill_no: f.bill_no, name: f.name.trim(), id_type: f.id_proof.trim(), data_b64: b64 });
+      if (r === FAIL) { scanStatus.value = ""; return; }
+      scanStatus.value = "saved";
+      await alertBox("success", "Photo Saved 🎉", r.message);
+    }
     async function onScan() {
       const bill = f.bill_no, name = f.name.trim(), idType = f.id_proof.trim();
       if (!name || !idType) {
         await alertBox("warning", "Incomplete Data", "Please enter the Customer Name and ID Proof Type (e.g. 'Aadhar') before scanning!");
         return;
       }
+      if (IS_WEB) { camera.value.click(); return; }
       scanStatus.value = "scanning";
       const r = await run("scan_id", { bill_no: bill, name, id_type: idType });
       if (r === FAIL) { scanStatus.value = ""; return; }
@@ -596,7 +614,7 @@ const BillingPage = {
     }
 
     const columns = [
-      { idx: 0, label: "Bill No", width: "96px", cls: () => "strong num" },
+      { idx: 0, label: "Bill No", width: "116px", cls: () => "strong num" },
       { idx: 1, label: "Name", width: "150px" },
       { idx: 2, label: "Phone", width: "124px", cls: () => "num" },
       { idx: 3, label: "Phone 2", width: "124px", cls: () => "num" },
@@ -612,7 +630,7 @@ const BillingPage = {
 
     return { f, rows, locked, scanStatus, sug, nameSug, filt, tableRows, selectedBill, tableLoading, columns,
       updateTotal, calculateFormBalance, onCode, onQty, onName, pickName, nameKey, hideNameSug,
-      onPhone, onPhone2, pickCustomer, sugKey, hideSug, onScan, clearForm, submit, cancelRental, printBill, backup,
+      onPhone, onPhone2, pickCustomer, sugKey, hideSug, onScan, onPhoto, camera, isWeb: IS_WEB, clearForm, submit, cancelRental, printBill, backup,
       clearFilters, selectRow, printList, hasStar, stripStar };
   },
   template: `
@@ -658,7 +676,8 @@ const BillingPage = {
             <div class="field span-2"><label>ID Proof</label>
               <div class="with-btn" style="align-items:center">
                 <input class="input" data-f="id_proof" v-model="f.id_proof" :disabled="locked" placeholder="e.g. Aadhar">
-                <button class="btn" :disabled="locked || scanStatus === 'scanning'" @click="onScan" title="Scan the ID proof"><Icon name="scan" size="sm"/>Scan</button>
+                <button class="btn" :disabled="locked || scanStatus === 'scanning'" @click="onScan" :title="isWeb ? 'Take a photo of the ID proof' : 'Scan the ID proof'"><Icon name="scan" size="sm"/>{{ isWeb ? 'Photo' : 'Scan' }}</button>
+                <input ref="camera" type="file" accept="image/*" capture="environment" style="display:none" @change="onPhoto">
                 <span v-if="scanStatus === 'scanning'" class="scan-status" style="color:var(--warning-text)">Scanning…</span>
                 <span v-else-if="scanStatus === 'saved'" class="scan-status" style="color:var(--success-text)">✓ Saved</span>
               </div>
@@ -742,7 +761,7 @@ const BillingPage = {
           <span class="grow"></span>
           <button class="btn ghost sm" @click="clearFilters"><Icon name="x" size="sm"/>Clear Filters</button>
         </div>
-        <DataTable :columns="columns" :rows="tableRows" :row-key="r => r.values[0]" :selected-key="selectedBill" selectable min-width="900px"
+        <DataTable :columns="columns" :rows="tableRows" :row-key="r => r.values[0]" :selected-key="selectedBill" selectable min-width="920px"
                    @select="selectRow" empty-text="No bills match these filters.">
           <template #cell-0="{ row, value }"><span class="status-dot" :class="row.tag === 'returned' ? 'ok' : 'open'"></span>{{ value }}</template>
           <template #cell-1="{ value }">{{ stripStar(value) }}<span v-if="hasStar(value)" class="star"> ★</span></template>
