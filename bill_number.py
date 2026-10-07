@@ -50,11 +50,10 @@ def _next_branch_bill_no(cur, branch: str) -> str:
     without a branch (A3002, the main branch's old bills) or '<branch>-A....'.
     Phone-series bills (VDV-M....) and other branches' bills are skipped.
     """
-    cur.execute("""
-        SELECT bill_no FROM rentals
-        WHERE bill_no IS NOT NULL AND bill_no != ''
-        ORDER BY id DESC
-    """)
+    # The HIGHEST number in the series (not the newest row): after a restore from the
+    # cloud, rows arrive in update order, so an old bill edited later may be the newest row.
+    cur.execute("SELECT bill_no FROM rentals WHERE bill_no IS NOT NULL AND bill_no != ''")
+    best = None
     for (raw,) in cur.fetchall():
         bill = str(raw).strip().upper()
         if bill.startswith(branch + "-"):
@@ -64,14 +63,18 @@ def _next_branch_bill_no(cur, branch: str) -> str:
         match = re.match(r"^([A-Z]+)(\d{4})$", bill)
         if not match or match.group(1) == MOBILE_SERIES:
             continue
-        prefix, number = match.group(1), int(match.group(2)) + 1
-        if number > 9999:
+        key = (len(match.group(1)), match.group(1), int(match.group(2)))
+        if best is None or key > best:
+            best = key
+    if best is None:
+        return f"{branch}-A0001"
+    prefix, number = best[1], best[2] + 1
+    if number > 9999:
+        prefix = increment_prefix(prefix)
+        if prefix == MOBILE_SERIES:
             prefix = increment_prefix(prefix)
-            if prefix == MOBILE_SERIES:
-                prefix = increment_prefix(prefix)
-            number = 1
-        return f"{branch}-{prefix}{number:04d}"
-    return f"{branch}-A0001"
+        number = 1
+    return f"{branch}-{prefix}{number:04d}"
 
 
 def generate_next_bill_no(db) -> str:

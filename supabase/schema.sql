@@ -339,3 +339,14 @@ revoke all on public.branches, public.profiles, public.rentals, public.rental_it
   public.installments, public.refunds_history, public.customers, public.materials, public.id_proofs,
   public.sync_status from anon;
 grant execute on function public.is_owner(), public.my_branch(), public.can_access(text) to authenticated;
+
+-- --------------------------------------------------------------- creation time for rows made on the phone/web
+-- (same text format as SQLite's CURRENT_TIMESTAMP, which the branch PCs use)
+do $$
+declare t text;
+begin
+  foreach t in array array['rentals','returns','installments','refunds_history'] loop
+    execute format($f$alter table public.%I alter column created_at
+                     set default to_char(now() at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS')$f$, t);
+  end loop;
+end $$;

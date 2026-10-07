@@ -100,6 +100,15 @@ def offline_sign_in(db, username, password):
             "branch_name": config.BRANCHES.get(pc_branch, pc_branch), "first_setup": False, "offline": True}
 
 
+def pc_branch(db):
+    conn = db.get_connection()
+    return LS.get_meta(conn, "branch_code") if LS.is_installed(conn) else None
+
+
+def local_bill_count(db):
+    return db.get_connection().execute("SELECT COUNT(*) FROM rentals").fetchone()[0]
+
+
 def stored_refresh_token(db):
     conn = db.get_connection()
     return LS.get_meta(conn, "refresh_token") if LS.is_installed(conn) else None

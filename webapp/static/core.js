@@ -43,6 +43,7 @@ const store = reactive({
   version: 0,              // bumped by reloadAll(); pages reload when it changes
   busy: 0,
   status: "Records: Loading...",
+  user: null,              // signed-in user: {username, display_name, role, branch, branch_name, offline}
   theme: document.documentElement.getAttribute("data-theme") || "light",
 });
 const materialMap = new Map();

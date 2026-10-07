@@ -508,6 +508,7 @@ const BillingPage = {
     async function clearForm() {
       locked.value = false;
       Object.assign(f, blankForm());
+      if (store.user && store.user.display_name) f.cashier_name = store.user.display_name;  // signed-in person (editable)
       rows.forEach((r) => Object.assign(r, blankRow()));
       scanStatus.value = "";
       sug.open = ""; nameSug.row = -1;

@@ -33,7 +33,6 @@ from analytics_dashboard import AnalyticsDashboard
 import materials
 
 MAX_MACHINES_PER_BILL = 5
-PASSWORDS = {"AMA": False, "AAKASHBENA": True}  # password -> is_owner
 
 
 class UserError(Exception):
@@ -53,12 +52,6 @@ def _s(value):
 # ---------------------------------------------------------------------------
 # Startup / app shell
 # ---------------------------------------------------------------------------
-
-def check_password(pwd):
-    if pwd in PASSWORDS:
-        return {"is_owner": PASSWORDS[pwd]}
-    raise UserError("Access Denied", "Incorrect Password")
-
 
 def initialize_database():
     """Same steps as RentalBillingApp.initialize_database + tab setup in main.py."""

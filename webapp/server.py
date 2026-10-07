@@ -6,6 +6,7 @@
 # * A random token generated at launch must accompany every API call, so other
 #   programs or web pages on this PC cannot call the API.
 import logging
+import re
 import os
 import secrets
 import sys
@@ -18,6 +19,9 @@ from werkzeug.serving import make_server
 
 from webapp import services, reports
 from webapp.services import UserError
+from cloud import accounts, config as cloud_config, client as cloud_client, local_sync as LS
+from cloud.client import Session, CloudError
+from cloud.sync_engine import SyncEngine
 
 APP_TITLE = "Rental Billing Software v2.0"
 
@@ -37,6 +41,10 @@ class Backend:
         self.is_owner = None
         self.window = None
         self.quit_confirmed = False
+        self.user = None             # signed-in user (username, role, branch, ...)
+        self.session = None          # cloud session of that user (None when signed in offline)
+        self.engine = None           # cloud SyncEngine (one per app run)
+        self.db_warning = None
         self._notes = []
         self._notes_lock = threading.Lock()
 
@@ -86,32 +94,189 @@ backend = Backend()
 # API methods: name -> handler(**params)
 # ---------------------------------------------------------------------------
 
-def _login(password=""):
-    result = services.check_password(password)
-    backend.is_owner = result["is_owner"]
-    return result
-
-
-def _init():
-    if backend.is_owner is None:
-        raise UserError("Access Denied", "Please log in first.")
+def _ensure_db():
     if backend.db is None:
         db, warning = backend.run(services.initialize_database)
         backend.db = db
+        backend.db_warning = warning
         try:
             from drive_backup import backup_files
             backup_files(silent=True)
             print("☁️ Background Smart Sync triggered on startup.")
         except Exception as e:
             print(f"Startup sync skipped: {e}")
-    else:
-        warning = None
+
+
+def _persist_refresh_token(token):
+    try:
+        backend.run(lambda: LS.set_meta(backend.db.get_connection(), "refresh_token", token))
+    except Exception as e:
+        print(f"[WARN] could not store refresh token: {e}")
+
+
+def _start_sync(session):
+    if backend.engine is None:
+        backend.engine = SyncEngine(lambda: backend.db, backend.run,
+                                    materials_path=os.path.abspath("materials.csv"))
+    session.on_refresh = _persist_refresh_token
+    backend.engine.start(session)
+
+
+def _login(username="", password="", branch=None):
+    """Sign in with a cloud account; falls back to the remembered login when offline."""
+    _ensure_db()
+    username = (username or "").strip().lower()
+    if not username or not password:
+        raise UserError("Sign In", "Enter your username and password.", kind="warning")
+    session = None
+    try:
+        session, profile = accounts.online_sign_in(username, password)
+        target = profile.get("branch_id") if profile.get("role") == "cashier" else branch
+        if target and not backend.run(accounts.pc_branch, backend.db) and backend.run(accounts.local_bill_count, backend.db):
+            # This PC has its own bills: linking it to a branch that already has cloud data would
+            # put both copies in this database. Only an empty PC may restore from the cloud.
+            if session.select("rentals", {"branch_id": f"eq.{target}", "select": "id", "limit": 1}):
+                raise UserError("Cannot Set Up This Computer",
+                                f"This computer already has its own bills, and {cloud_config.BRANCHES.get(target, target)} "
+                                "already has data in the cloud. Linking them would duplicate every bill.\n\n"
+                                "To use this computer for that branch, start the app in an empty folder (no rentals.db) "
+                                "and it will download the branch's data from the cloud.")
+        info = backend.run(accounts.finish_online, backend.db, username, password, session, profile, branch)
+    except accounts.LoginError as e:
+        if e.code == "choose_branch":
+            return {"choose_branch": True, "branches": e.extra["branches"], "suggested": e.extra.get("suggested")}
+        raise UserError("Sign In", str(e))
+    except CloudError as e:
+        if not e.offline:
+            raise UserError("Sign In", str(e))
+        try:
+            info = backend.run(accounts.offline_sign_in, backend.db, username, password)
+        except accounts.LoginError as le:
+            raise UserError("Sign In", str(le))
+    if session is not None:
+        # A PC that already has history (the main branch) uploads it once, if the cloud is empty
+        restoring = info["first_setup"] and not backend.run(accounts.local_bill_count, backend.db)
+        if info["first_setup"] and backend.run(accounts.first_upload_needed, backend.db, session, info["branch"]):
+            if not session.select("rentals", {"branch_id": f"eq.{info['branch']}", "select": "id", "limit": 1}):
+                backend.run(accounts.queue_history, backend.db)
+        _start_sync(session)
+        if restoring:
+            # Empty PC joining a branch: download the branch's data BEFORE billing starts,
+            # so the next bill number continues the branch's real sequence.
+            if not backend.engine.sync_once() and backend.engine.state.get("error"):
+                raise UserError("Download Failed", "Could not download this branch's data: "
+                                + str(backend.engine.state["error"]) + "\nPlease check the internet and sign in again.")
+            info["restored"] = backend.run(accounts.local_bill_count, backend.db)
+    elif backend.engine is None:
+        token = backend.run(accounts.stored_refresh_token, backend.db)
+        if token:
+            _start_sync(Session(None, token, 0, None))
+    backend.session = session
+    backend.user = info
+    backend.is_owner = info["role"] == "owner"
+    return info
+
+
+def _logout():
+    backend.user = None
+    backend.session = None
+    backend.is_owner = None
+    return True
+
+
+def _init():
+    if backend.is_owner is None:
+        raise UserError("Access Denied", "Please log in first.")
+    _ensure_db()
     return {
         "is_owner": backend.is_owner,
-        "warning": warning,
+        "user": backend.user,
+        "warning": backend.db_warning,
         "materials": services.materials_list(),
         "bill_no": backend.with_db(services.next_bill_no),
     }
+
+
+def _sync_status():
+    if backend.engine:
+        return dict(backend.engine.state)
+    st = {"online": False, "pending": 0, "last_sync": None, "error": None, "running": False, "data_rev": 0,
+          "photos_pending": 0}
+    if backend.db is not None:
+        try:
+            st["pending"] = backend.run(lambda: LS.pending_count(backend.db.get_connection())
+                                        if LS.is_installed(backend.db.get_connection()) else 0)
+        except Exception:
+            pass
+    return st
+
+
+def _sync_now():
+    if backend.engine:
+        backend.engine.kick()
+    return True
+
+
+# ---------------------------------------------------------------- owner: team management (online)
+def _owner_session():
+    _owner_only()
+    if backend.session is None:
+        raise UserError("Internet Needed", "Managing logins needs internet. Sign out and sign in again when online.",
+                        kind="warning")
+    return backend.session
+
+
+def _team_list():
+    s = _owner_session()
+    try:
+        rows = s.select("profiles", {"select": "user_id,username,display_name,branch_id,role,active,created_at",
+                                     "order": "branch_id.asc,username.asc"})
+        status = s.select("sync_status", {"select": "*"})
+    except CloudError as e:
+        raise UserError("Error", str(e))
+    return {"users": rows, "branches": cloud_config.BRANCHES, "sync": status, "me": backend.session.user_id}
+
+
+def _team_add(username="", display_name="", password="", branch="", role="cashier"):
+    s = _owner_session()
+    username = (username or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9._-]{3,30}", username):
+        raise UserError("Add Login", "Username must be 3-30 characters: letters, numbers, dot, dash or underscore.",
+                        kind="warning")
+    if len(password or "") < 6:
+        raise UserError("Add Login", "Password must be at least 6 characters.", kind="warning")
+    if branch not in cloud_config.BRANCHES or role not in ("cashier", "owner"):
+        raise UserError("Add Login", "Choose a branch and a role.", kind="warning")
+    try:
+        created = cloud_client.sign_up(username, password, display_name or username)
+        user_id = (created.get("user") or created).get("id")
+        s.rpc("admin_set_profile", {"p_user": user_id, "p_branch": branch, "p_role": role, "p_active": True,
+                                    "p_display_name": display_name or username})
+    except CloudError as e:
+        msg = str(e)
+        if "already" in msg.lower():
+            msg = "That username is already taken."
+        raise UserError("Add Login", msg)
+    return True
+
+
+def _team_update(user_id="", branch="", role="cashier", active=True, display_name=None):
+    s = _owner_session()
+    try:
+        s.rpc("admin_set_profile", {"p_user": user_id, "p_branch": branch, "p_role": role, "p_active": bool(active),
+                                    "p_display_name": display_name})
+    except CloudError as e:
+        raise UserError("Update Login", str(e))
+    return True
+
+
+def _team_reset_password(user_id="", password=""):
+    s = _owner_session()
+    try:
+        s.rpc("admin_reset_password", {"p_user": user_id, "p_password": password})
+    except CloudError as e:
+        raise UserError("Reset Password", str(e))
+    return True
 
 
 def _owner_only():
@@ -182,7 +347,14 @@ D = backend.with_db
 API = {
     # shell
     "login": _login,
+    "logout": _logout,
     "init": _init,
+    "sync_status": _sync_status,
+    "sync_now": _sync_now,
+    "team_list": _team_list,
+    "team_add": _team_add,
+    "team_update": _team_update,
+    "team_reset_password": _team_reset_password,
     "status": lambda: D(services.status_counts),
     "notes": backend.take_notes,
     "quit": _quit,
@@ -230,7 +402,11 @@ API = {
 }
 
 # Calls that are allowed before the user has logged in
-PUBLIC = {"login", "quit", "notes"}
+PUBLIC = {"login", "quit", "notes", "sync_status"}
+
+# Calls that change data: wake the sync engine right after them
+WRITES = {"submit_form", "cancel_record", "return_submit", "return_add_payment", "return_split",
+          "save_customer", "delete_old_data", "scan_id"}
 
 
 def create_app():
@@ -262,7 +438,10 @@ def create_app():
             abort(403)
         params = request.get_json(silent=True) or {}
         try:
-            return jsonify({"ok": True, "result": handler(**params)})
+            result = handler(**params)
+            if method in WRITES and backend.engine:
+                backend.engine.kick()
+            return jsonify({"ok": True, "result": result})
         except UserError as e:
             return jsonify({"ok": False, "error": {"title": e.title, "message": e.message, "kind": e.kind}})
         except Exception as e:

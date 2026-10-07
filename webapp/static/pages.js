@@ -491,4 +491,128 @@ const EquipmentPage = {
   </div>`,
 };
 
-window.Pages = { PendingReturnsPage, PendingPaymentsPage, DailyPage, CustomerReportPage, AnalyticsPage, CustomersPage, EquipmentPage };
+// ======================================================================== Team & Branches (owner, needs internet)
+function timeAgo(iso) {
+  if (!iso) return "never";
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 90) return "just now";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  if (s < 86400) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " days ago";
+}
+const TeamPage = {
+  components: { Icon, DataTable },
+  props: { active: Boolean },
+  setup(props) {
+    const data = reactive({ users: [], branches: {}, sync: [], me: null, loaded: false, error: "" });
+    const load = async () => {
+      try { Object.assign(data, await api("team_list"), { loaded: true, error: "" }); }
+      catch (e) { data.error = e.message; data.loaded = true; }
+    };
+    useReload(props, load);
+    const branchOpts = computed(() => Object.entries(data.branches).map(([v, l]) => ({ value: v, label: `${l} (${v})` })));
+    const roleOpts = [{ value: "cashier", label: "Cashier (own branch only)" }, { value: "owner", label: "Owner (all branches)" }];
+    const branchCards = computed(() => Object.entries(data.branches).map(([code, name]) => {
+      const st = data.sync.find((x) => x.branch_id === code);
+      const users = data.users.filter((u) => u.branch_id === code && u.active).length;
+      const mins = st && st.last_sync_at ? (Date.now() - new Date(st.last_sync_at).getTime()) / 60000 : null;
+      return { code, name, users, last: st ? timeAgo(st.last_sync_at) : "never", pending: st ? st.pending : 0,
+               tone: mins === null ? "gray" : (mins < 10 ? "green" : (mins < 180 ? "amber" : "red")) };
+    }));
+    async function addLogin() {
+      await formBox({
+        title: "Add Login", icon: "user", okText: "Create Login", wide: true,
+        fields: [
+          { key: "username", label: "Username (used to sign in)", required: true, autofocus: true },
+          { key: "display_name", label: "Full name (shown on screen)" },
+          { key: "password", label: "Password (min 6 characters)", type: "password", required: true },
+          { key: "branch", label: "Branch", type: "select", options: branchOpts.value, value: branchOpts.value[0] && branchOpts.value[0].value },
+          { key: "role", label: "Role", type: "select", options: roleOpts, value: "cashier" },
+        ],
+        validate: (v) => !/^[a-z0-9._-]{3,30}$/.test(v.username.trim().toLowerCase()) ? "Username: 3-30 letters/numbers (dot, dash, underscore allowed), no spaces."
+          : (v.password.length < 6 ? "Password must be at least 6 characters." : null),
+        onSubmit: async (v) => {
+          const r = await run("team_add", { username: v.username, display_name: v.display_name, password: v.password, branch: v.branch, role: v.role });
+          if (r === FAIL) return false;
+          toast("success", "Login created", `${v.username.trim().toLowerCase()} can now sign in.`);
+          await load();
+          return true;
+        },
+      });
+    }
+    async function editLogin(u) {
+      const isMe = u.user_id === data.me;
+      await formBox({
+        title: "Edit " + u.username, icon: "edit", okText: "Save", wide: true,
+        fields: [
+          { key: "display_name", label: "Full name", value: u.display_name || "" },
+          { key: "branch", label: "Branch", type: "select", options: branchOpts.value, value: u.branch_id || (branchOpts.value[0] && branchOpts.value[0].value) },
+          { key: "role", label: "Role", type: "select", options: roleOpts, value: u.role || "cashier", disabled: isMe },
+          { key: "active", label: "Login is active (can sign in)", type: "checkbox", value: !!u.active },
+        ],
+        note: isMe ? "This is your own login, so you can't remove your owner access here." : "",
+        onSubmit: async (v) => {
+          const r = await run("team_update", { user_id: u.user_id, branch: v.branch, role: isMe ? "owner" : v.role, active: isMe ? true : v.active, display_name: v.display_name });
+          if (r === FAIL) return false;
+          await load();
+          return true;
+        },
+      });
+    }
+    async function resetPassword(u) {
+      await formBox({
+        title: "Reset password for " + u.username, icon: "lock", okText: "Set Password",
+        fields: [{ key: "password", label: "New password (min 6 characters)", type: "password", autofocus: true }],
+        validate: (v) => v.password.length < 6 ? "Password must be at least 6 characters." : null,
+        onSubmit: async (v) => {
+          const r = await run("team_reset_password", { user_id: u.user_id, password: v.password });
+          if (r === FAIL) return false;
+          toast("success", "Password changed", `Tell ${u.username} the new password. If they sign in on a computer while it's offline, the old password keeps working there until it's online again.`, 10000);
+          return true;
+        },
+      });
+    }
+    const columns = [
+      { key: "username", label: "Username", width: "170px", cls: () => "strong" },
+      { key: "display_name", label: "Name" },
+      { key: "branch_id", label: "Branch", width: "200px", get: (u) => data.branches[u.branch_id] ? `${data.branches[u.branch_id]} (${u.branch_id})` : "— not assigned —" },
+      { key: "role", label: "Role", width: "120px", align: "c" },
+      { key: "active", label: "Status", width: "120px", align: "c" },
+      { key: "actions", label: "", width: "230px", align: "r", title: false },
+    ];
+    return { data, load, branchCards, addLogin, editLogin, resetPassword, columns };
+  },
+  template: `
+  <div class="page fill">
+    <div v-if="data.error" class="card" style="padding:16px;display:flex;gap:12px;align-items:center">
+      <Icon name="warn"/><span>{{ data.error }}</span><span style="flex:1"></span><button class="btn" @click="load"><Icon name="refresh" size="sm"/>Try again</button>
+    </div>
+    <div class="stat-grid" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+      <div v-for="b in branchCards" :key="b.code" class="stat">
+        <div class="stat-top"><span class="stat-icon" :style="{ background: 'var(--surface-3)' }"><Icon name="layers" size="sm"/></span><span>{{ b.name }} ({{ b.code }})</span>
+          <span class="stat-extra"><span class="pill" :class="b.tone"><span class="dot"></span>{{ b.tone === 'green' ? 'Online' : (b.tone === 'gray' ? 'Not set up' : 'Last seen ' + b.last) }}</span></span></div>
+        <div class="t-muted" style="font-size:12.5px">Last sync: <b>{{ b.last }}</b> · {{ b.pending || 0 }} waiting · {{ b.users }} active login{{ b.users === 1 ? '' : 's' }}</div>
+      </div>
+    </div>
+    <div class="toolbar">
+      <span class="tb-label">Logins</span><span class="grow"></span>
+      <button class="btn" @click="load"><Icon name="refresh" size="sm"/>Refresh</button>
+      <button class="btn primary" @click="addLogin"><Icon name="plus" size="sm"/>Add Login</button>
+    </div>
+    <div class="card flush" style="display:flex;flex-direction:column;flex:1;min-height:0">
+      <DataTable :columns="columns" :rows="data.users" :row-key="u => u.user_id" empty-text="No logins yet." empty-icon="users">
+        <template #cell-role="{ row }"><span class="pill" :class="row.role === 'owner' ? 'purple' : 'blue'">{{ row.role || '—' }}</span></template>
+        <template #cell-active="{ row }"><span class="pill" :class="row.active ? 'green' : 'gray'">{{ row.active ? 'Active' : 'Inactive' }}</span></template>
+        <template #cell-actions="{ row }">
+          <span style="display:inline-flex;gap:6px">
+            <button class="btn sm" @click.stop="editLogin(row)"><Icon name="edit" size="sm"/>Edit</button>
+            <button class="btn sm" @click.stop="resetPassword(row)"><Icon name="lock" size="sm"/>Reset Password</button>
+          </span>
+        </template>
+      </DataTable>
+      <div class="table-foot"><span>{{ data.users.length }} logins</span><span style="margin-left:auto">New sign-ups stay inactive until you assign a branch here.</span></div>
+    </div>
+  </div>`,
+};
+
+window.Pages = { PendingReturnsPage, PendingPaymentsPage, DailyPage, CustomerReportPage, AnalyticsPage, CustomersPage, EquipmentPage, TeamPage };

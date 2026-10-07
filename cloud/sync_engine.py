@@ -12,6 +12,7 @@
 # Conflicts: "branch wins" - a downloaded change is skipped when this PC still
 # has an unsent change for the same record; the PC's version is uploaded next.
 import csv
+import sqlite3
 import hashlib
 import os
 import threading
@@ -57,6 +58,18 @@ def to_cloud(tbl, col, v):
     return v
 ORDER = ["rentals", "customers", "rental_items", "returns", "installments", "refunds_history"]
 BATCH = 400
+
+
+def compress_photo(path, max_side=1600, quality=72):
+    """Shrink a scan to a small JPEG (~100-250 KB) so it fits the free storage easily."""
+    from PIL import Image
+    import io
+    with Image.open(path) as im:
+        im = im.convert("RGB")
+        im.thumbnail((max_side, max_side))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=quality, optimize=True)
+        return buf.getvalue()
 
 
 def _uuid_for(conn, tbl, local_id):
@@ -139,76 +152,102 @@ def apply_remote(db, tbl, rows, device):
     """Apply downloaded rows for one table. Returns (applied, skipped)."""
     conn = db.get_connection()
     applied = skipped = 0
+    # Store rows exactly as they exist on the other side. The main branch's database
+    # has no CHECK constraints (removed by an old migration) while a freshly created
+    # database has them; ignoring them here keeps every branch's data identical.
+    conn.execute("PRAGMA ignore_check_constraints = ON")
+    conn.execute("CREATE TABLE IF NOT EXISTS sync_errors (id INTEGER PRIMARY KEY AUTOINCREMENT, tbl TEXT, uuid TEXT, "
+                 "error TEXT, at TEXT DEFAULT CURRENT_TIMESTAMP)")
     conn.execute("INSERT INTO sync_meta (key, value) VALUES ('applying', '1') "
                  "ON CONFLICT(key) DO UPDATE SET value = '1'")
     try:
         for r in rows:
-            if r.get("updated_by") == device:
-                continue
-            cols = COLUMNS[tbl]
-            vals = {c: r.get(c) for c in cols}
-            if tbl == "customers":
-                local = conn.execute("SELECT id FROM customers WHERE phone = ?", (r["phone"],)).fetchone()
-                if local and _has_pending(conn, tbl, local[0]):
-                    skipped += 1; continue
-                if r.get("deleted"):
-                    continue
-                if local:
-                    conn.execute("UPDATE customers SET name=?, phone2=?, address=?, is_regular=? WHERE id=?",
-                                 (vals["name"], vals["phone2"], vals["address"], vals["is_regular"], local[0]))
-                else:
-                    conn.execute("INSERT INTO customers (name, phone, phone2, address, is_regular) VALUES (?,?,?,?,?)",
-                                 (vals["name"], vals["phone"], vals["phone2"], vals["address"], vals["is_regular"]))
+            conn.execute("SAVEPOINT sync_row")
+            try:
+                result = _apply_row(conn, tbl, r, device)
+                conn.execute("RELEASE sync_row")
+            except sqlite3.Error as e:
+                # one bad record must not block the rest of the sync: log it and move on
+                conn.execute("ROLLBACK TO sync_row")
+                conn.execute("RELEASE sync_row")
+                conn.execute("INSERT INTO sync_errors (tbl, uuid, error) VALUES (?, ?, ?)", (tbl, str(r.get("id")), str(e)))
+                print(f"[SYNC] skipped {tbl} {r.get('id')}: {e}")
+                result = "skipped"
+            if result == "applied":
                 applied += 1
-                continue
-
-            if tbl != "rentals":
-                rental_local = _local_for(conn, "rentals", r["rental_id"])
-                if rental_local is None:
-                    skipped += 1; continue
-                vals["rental_id"] = rental_local
-
-            if tbl == "returns":
-                local = conn.execute("SELECT id FROM returns WHERE rental_id = ?", (rental_local,)).fetchone()
-                local_id = local[0] if local else None
-                pending = conn.execute("SELECT 1 FROM sync_outbox WHERE tbl='returns' AND (local_id = ? OR extra = ?) LIMIT 1",
-                                       (local_id if local_id is not None else -1, str(rental_local))).fetchone()
-                if pending:
-                    skipped += 1; continue
-            else:
-                local_id = _local_for(conn, tbl, r["id"])
-                if local_id is not None and _has_pending(conn, tbl, local_id):
-                    skipped += 1; continue
-                if local_id is not None and not conn.execute(f"SELECT 1 FROM {tbl} WHERE id = ?", (local_id,)).fetchone():
-                    local_id = None if not r.get("deleted") else local_id
-
-            if r.get("deleted"):
-                if local_id is not None:
-                    conn.execute(f"DELETE FROM {tbl} WHERE id = ?", (local_id,))
-                    applied += 1
-                continue
-
-            keys = list(vals.keys())
-            if local_id is not None:
-                conn.execute(f"UPDATE {tbl} SET " + ", ".join(f"{k} = ?" for k in keys) + " WHERE id = ?",
-                             [vals[k] for k in keys] + [local_id])
-            else:
-                if vals.get("created_at") is None:
-                    keys.remove("created_at") if "created_at" in keys else None
-                cur = conn.execute(f"INSERT INTO {tbl} (" + ", ".join(keys) + ") VALUES (" +
-                                   ", ".join("?" for _ in keys) + ")", [vals[k] for k in keys])
-                if tbl != "returns":
-                    conn.execute("INSERT OR REPLACE INTO sync_ids (tbl, local_id, uuid) VALUES (?, ?, ?)",
-                                 (tbl, cur.lastrowid, r["id"]))
-            applied += 1
+            elif result == "skipped":
+                skipped += 1
+        # clear the flag inside the same transaction, so no other connection
+        # (e.g. the background customer sync) can ever observe applying = '1'
+        conn.execute("UPDATE sync_meta SET value = '0' WHERE key = 'applying'")
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     finally:
-        conn.execute("UPDATE sync_meta SET value = '0' WHERE key = 'applying'")
-        conn.commit()
+        conn.execute("PRAGMA ignore_check_constraints = OFF")
     return applied, skipped
+
+
+def _apply_row(conn, tbl, r, device):
+    """Apply one downloaded row. Returns 'applied', 'skipped' (branch wins / missing parent) or 'ignored'."""
+    if r.get("updated_by") == device:
+        return "ignored"
+    vals = {c: r.get(c) for c in COLUMNS[tbl]}
+    if tbl == "customers":
+        local = conn.execute("SELECT id FROM customers WHERE phone = ?", (r["phone"],)).fetchone()
+        if local and _has_pending(conn, tbl, local[0]):
+            return "skipped"
+        if r.get("deleted"):
+            return "ignored"
+        if local:
+            conn.execute("UPDATE customers SET name=?, phone2=?, address=?, is_regular=? WHERE id=?",
+                         (vals["name"], vals["phone2"], vals["address"], vals["is_regular"], local[0]))
+        else:
+            conn.execute("INSERT INTO customers (name, phone, phone2, address, is_regular) VALUES (?,?,?,?,?)",
+                         (vals["name"], vals["phone"], vals["phone2"], vals["address"], vals["is_regular"]))
+        return "applied"
+
+    rental_local = None
+    if tbl != "rentals":
+        rental_local = _local_for(conn, "rentals", r["rental_id"])
+        if rental_local is None:
+            return "skipped"
+        vals["rental_id"] = rental_local
+
+    if tbl == "returns":
+        local = conn.execute("SELECT id FROM returns WHERE rental_id = ?", (rental_local,)).fetchone()
+        local_id = local[0] if local else None
+        pending = conn.execute("SELECT 1 FROM sync_outbox WHERE tbl='returns' AND (local_id = ? OR extra = ?) LIMIT 1",
+                               (local_id if local_id is not None else -1, str(rental_local))).fetchone()
+        if pending:
+            return "skipped"
+    else:
+        local_id = _local_for(conn, tbl, r["id"])
+        if local_id is not None and _has_pending(conn, tbl, local_id):
+            return "skipped"
+        if local_id is not None and not conn.execute(f"SELECT 1 FROM {tbl} WHERE id = ?", (local_id,)).fetchone():
+            local_id = None if not r.get("deleted") else local_id
+
+    if r.get("deleted"):
+        if local_id is not None:
+            conn.execute(f"DELETE FROM {tbl} WHERE id = ?", (local_id,))
+            return "applied"
+        return "ignored"
+
+    keys = list(vals.keys())
+    if local_id is not None:
+        conn.execute(f"UPDATE {tbl} SET " + ", ".join(f"{k} = ?" for k in keys) + " WHERE id = ?",
+                     [vals[k] for k in keys] + [local_id])
+    else:
+        if "created_at" in keys and vals.get("created_at") is None:
+            keys.remove("created_at")
+        cur = conn.execute(f"INSERT INTO {tbl} (" + ", ".join(keys) + ") VALUES (" +
+                           ", ".join("?" for _ in keys) + ")", [vals[k] for k in keys])
+        if tbl != "returns":
+            conn.execute("INSERT OR REPLACE INTO sync_ids (tbl, local_id, uuid) VALUES (?, ?, ?)",
+                         (tbl, cur.lastrowid, r["id"]))
+    return "applied"
 
 
 # ============================================================== engine
@@ -220,7 +259,7 @@ class SyncEngine:
         self.materials_path = materials_path
         self.session = None
         self.state = {"online": False, "last_sync": None, "pending": 0, "error": None, "running": False,
-                      "needs_login": False}
+                      "needs_login": False, "data_rev": 0, "photos_pending": 0}
         self._wake = threading.Event()
         self._stop = False
         self._lock = threading.Lock()
@@ -264,10 +303,12 @@ class SyncEngine:
                 pushed = self._push(db, branch, device)
                 pulled = self._pull(db, branch, device, meta["pull_cursor"])
                 self._push_materials(db, branch, device)
+                self._push_photos(db, branch, device)
                 self.state["pending"] = self.run_db(lambda: LS.pending_count(db.get_connection()))
                 self._report_status(branch, device)
                 self.state.update(online=True, error=None, last_sync=datetime.now().strftime("%d-%m-%y %I:%M:%S %p"))
                 if pulled:
+                    self.state["data_rev"] += 1      # tells the UI to refresh its lists
                     self.notify("pulled", pulled)
                 return True
             except AuthError as e:
@@ -371,6 +412,32 @@ class SyncEngine:
             self.session.update("materials", {"branch_id": f"eq.{branch}", "code": f"eq.{code}"},
                                 {"deleted": True, "updated_by": device})
         self.run_db(lambda: LS.set_meta(db.get_connection(), "materials_hash", digest))
+
+    def _push_photos(self, db, branch, device, folder="ID_Proofs"):
+        """Compress and upload new ID proof scans (<branch>/<file name> in Storage)."""
+        if not os.path.isdir(folder):
+            self.state["photos_pending"] = 0
+            return
+        def done_set():
+            conn = db.get_connection()
+            conn.execute("CREATE TABLE IF NOT EXISTS photo_uploads (file_name TEXT PRIMARY KEY, uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+            conn.commit()
+            return {r[0] for r in conn.execute("SELECT file_name FROM photo_uploads")}
+        done = self.run_db(done_set)
+        todo = [f for f in sorted(os.listdir(folder))
+                if f.lower().endswith((".jpg", ".jpeg", ".png")) and f not in done]
+        self.state["photos_pending"] = len(todo)
+        for name in todo:
+            data = compress_photo(os.path.join(folder, name))
+            cloud_name = os.path.splitext(name)[0] + ".jpg"
+            path = f"{branch}/{cloud_name}"
+            self.session.upload("id-proofs", path, data)
+            self.session.upsert("id_proofs", [{"branch_id": branch, "bill_no": name.split("_")[0], "file_name": cloud_name,
+                                               "storage_path": path, "updated_by": device, "deleted": False}],
+                                "branch_id,file_name")
+            self.run_db(lambda: (db.get_connection().execute("INSERT OR IGNORE INTO photo_uploads (file_name) VALUES (?)", (name,)),
+                                 db.get_connection().commit()))
+            self.state["photos_pending"] -= 1
 
     def _report_status(self, branch, device):
         try:

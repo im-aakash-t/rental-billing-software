@@ -10,6 +10,7 @@ const TABS = [
   { id: "analytics", label: "Analytics", icon: "chart", title: "Analytics", sub: "Pending amounts, cash flow, stock and top customers" },
   { id: "customers", label: "Customers", icon: "users", title: "Customers", sub: "Customer directory" },
   { id: "equipment", label: "Equipment Analytics", icon: "wrench", title: "Equipment Analytics", sub: "Revenue by equipment type", owner: true },
+  { id: "team", label: "Team & Branches", icon: "users", title: "Team & Branches", sub: "Cashier logins and each branch's sync status", owner: true },
 ];
 
 // ------------------------------------------------------------------ dialog host
@@ -73,6 +74,10 @@ const DialogHost = {
             <label v-if="fl.type !== 'checkbox'">{{ fl.label }}<span v-if="fl.required" class="req">*</span></label>
             <textarea v-if="fl.type === 'textarea'" class="textarea" rows="3" v-model="d.values[fl.key]" :disabled="fl.disabled" :data-autofocus="fl.autofocus ? '' : null"></textarea>
             <label v-else-if="fl.type === 'checkbox'" class="check"><input type="checkbox" v-model="d.values[fl.key]">{{ fl.label }}</label>
+            <select v-else-if="fl.type === 'select'" class="select" v-model="d.values[fl.key]" :disabled="fl.disabled">
+              <option v-for="o in fl.options" :key="o.value" :value="o.value">{{ o.label }}</option>
+            </select>
+            <input v-else-if="fl.type === 'password'" class="input" type="password" v-model="d.values[fl.key]" autocomplete="new-password" :data-autofocus="fl.autofocus ? '' : null">
             <input v-else class="input" :class="{ num: fl.numeric }" v-model="d.values[fl.key]" :disabled="fl.disabled" :inputmode="fl.numeric ? 'decimal' : null" :data-autofocus="fl.autofocus ? '' : null">
           </div>
           <div v-if="d.note" class="t-muted" style="font-size:12.5px">{{ d.note }}</div>
@@ -103,43 +108,73 @@ const ToastHost = {
   </div>`,
 };
 
-// ------------------------------------------------------------------ login (the password prompt from main.py)
+// ------------------------------------------------------------------ login (cloud accounts, works offline after first sign-in)
 const LoginView = {
   components: { Icon },
   setup() {
-    const pwd = ref(""), error = ref(""), shake = ref(false), working = ref(false), input = ref(null);
-    async function submit() {
+    const user = ref(""), pwd = ref(""), error = ref(""), shake = ref(false), working = ref(false);
+    const userInput = ref(null), pwdInput = ref(null);
+    const branchPick = reactive({ open: false, branches: {}, value: "" });
+    let lastUser = "";
+    try { lastUser = localStorage.getItem("last_user") || ""; } catch (e) { /* ignore */ }
+    user.value = lastUser;
+    async function submit(branch) {
       if (working.value) return;
       working.value = true; error.value = "";
       try {
-        const r = await api("login", { password: pwd.value });
-        store.isOwner = r.is_owner;
+        const r = await api("login", { username: user.value, password: pwd.value, branch: branch || null });
+        if (r.choose_branch) {
+          branchPick.branches = r.branches; branchPick.value = r.suggested || Object.keys(r.branches)[0]; branchPick.open = true;
+          return;
+        }
+        try { localStorage.setItem("last_user", user.value.trim().toLowerCase()); } catch (e) { /* ignore */ }
+        store.user = r; store.isOwner = r.role === "owner";
         await boot();
+        if (r.first_setup) toast("success", "Computer set up", `This computer is now the ${r.branch_name} (${r.branch}) counter.` + (r.restored ? ` Downloaded ${r.restored} bills from the cloud.` : "") + " Its data syncs to the cloud automatically.", 10000);
+        else if (r.offline) toast("warning", "Signed in offline", "No internet right now. Keep working normally; everything will upload when the connection is back.", 9000);
       } catch (e) {
-        error.value = e.message || "Incorrect Password";
+        error.value = e.message || "Sign in failed";
         pwd.value = "";
         shake.value = true; setTimeout(() => (shake.value = false), 400);
-        nextTick(() => input.value && input.value.focus());
+        nextTick(() => pwdInput.value && pwdInput.value.focus());
       } finally { working.value = false; }
     }
     const exit = () => api("quit").catch(() => {});
-    onMounted(() => input.value && input.value.focus());
-    return { pwd, error, shake, working, input, submit, exit };
+    onMounted(() => { (lastUser ? pwdInput.value : userInput.value)?.focus(); });
+    return { user, pwd, error, shake, working, userInput, pwdInput, branchPick, submit, exit };
   },
   template: `
   <div class="login">
-    <form class="login-card" :class="{ shake }" @submit.prevent="submit">
+    <form v-if="!branchPick.open" class="login-card" :class="{ shake }" @submit.prevent="submit()">
       <div class="brand-mark"><Icon name="receipt"/></div>
       <h1>Rental Billing</h1>
-      <p class="lead">Enter your password to continue.</p>
+      <p class="lead">Sign in with your username and password.</p>
       <div class="field">
-        <label>Password</label>
-        <input ref="input" class="input" type="password" v-model="pwd" autocomplete="current-password" placeholder="••••••••">
+        <label>Username</label>
+        <input ref="userInput" class="input" v-model="user" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="e.g. ravi">
       </div>
-      <div v-if="error" class="form-error" style="margin-top:8px">{{ error }}</div>
-      <button class="btn primary" type="submit" :disabled="working">{{ working ? 'Opening…' : 'Sign in' }}</button>
-      <div class="login-foot"><span>v2.0 · Works offline</span><button type="button" class="btn ghost sm" @click="exit"><Icon name="power" size="sm"/>Exit</button></div>
+      <div class="field" style="margin-top:12px">
+        <label>Password</label>
+        <input ref="pwdInput" class="input" type="password" v-model="pwd" autocomplete="current-password" placeholder="••••••••">
+      </div>
+      <div v-if="error" class="form-error" style="margin-top:10px;white-space:pre-line">{{ error }}</div>
+      <button class="btn primary" type="submit" :disabled="working">{{ working ? 'Signing in…' : 'Sign in' }}</button>
+      <div class="login-foot"><span>v2.0 · Works offline after first sign-in</span><button type="button" class="btn ghost sm" @click="exit"><Icon name="power" size="sm"/>Exit</button></div>
     </form>
+    <div v-else class="login-card">
+      <div class="brand-mark"><Icon name="layers"/></div>
+      <h1>Set up this computer</h1>
+      <p class="lead">This is the first sign-in on this computer. Which branch's counter is it? Its bills will be numbered and synced for that branch.</p>
+      <div class="branch-pick">
+        <label v-for="(name, code) in branchPick.branches" :key="code" class="branch-opt" :class="{ on: branchPick.value === code }">
+          <input type="radio" :value="code" v-model="branchPick.value">
+          <span><b>{{ name }}</b><small>Bills: {{ code }}-A0001…</small></span>
+        </label>
+      </div>
+      <div v-if="error" class="form-error" style="margin-top:10px">{{ error }}</div>
+      <button class="btn primary" :disabled="working || !branchPick.value" @click="submit(branchPick.value)">{{ working ? 'Downloading this branch’s data… (can take a minute)' : 'Use this branch' }}</button>
+      <div class="login-foot"><span>You can't change this later from the app.</span><button type="button" class="btn ghost sm" @click="branchPick.open = false">Back</button></div>
+    </div>
   </div>`,
 };
 
@@ -148,6 +183,7 @@ async function boot() {
   try {
     const r = await api("init");
     store.isOwner = r.is_owner;
+    if (r.user) store.user = r.user;
     setMaterials(r.materials);
     store.phase = "app";
     refreshStatus();
@@ -171,14 +207,23 @@ const Shell = {
       document.documentElement.setAttribute("data-theme", store.theme);
       try { localStorage.setItem("theme", store.theme); } catch (e) { /* ignore */ }
     };
-    return { store, tabs, current, visited, toggleTheme, manualRefresh, quickBackup, requestQuit };
+    const syncTone = computed(() => !sync.online ? "off" : (sync.error ? "warn" : (sync.pending || sync.running ? "busy" : "ok")));
+    const syncLabel = computed(() => !sync.online ? "Offline" : (sync.error ? "Sync problem" : (sync.pending ? "Syncing…" : "Synced")));
+    const syncSub = computed(() => {
+      if (sync.pending) return `${sync.pending} change${sync.pending === 1 ? "" : "s"} waiting`;
+      return sync.last_sync ? "Last: " + sync.last_sync.replace(/:\d\d (AM|PM)$/, " $1") : "Not synced yet";
+    });
+    const syncTitle = computed(() => sync.error ? sync.error + " — click to retry" : "Click to sync now");
+    const syncNow = () => api("sync_now").then(() => setTimeout(pollSync, 1500)).catch(() => {});
+    return { store, tabs, current, visited, toggleTheme, manualRefresh, quickBackup, requestQuit, signOut,
+             syncTone, syncLabel, syncSub, syncTitle, syncNow };
   },
   template: `
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark"><Icon name="receipt"/></div>
-        <div class="brand-text"><div class="brand-name">Rental Billing</div><div class="brand-sub">{{ store.isOwner ? 'Owner view' : 'Counter view' }}</div></div>
+        <div class="brand-text"><div class="brand-name">{{ store.user ? store.user.branch_name : 'Rental Billing' }}</div><div class="brand-sub">{{ store.user ? store.user.display_name : '' }} · {{ store.isOwner ? 'Owner' : 'Cashier' }}</div></div>
       </div>
       <nav class="nav">
         <div class="nav-label">Workspace</div>
@@ -187,9 +232,13 @@ const Shell = {
         </button>
       </nav>
       <div class="sidebar-foot">
-        <button class="side-btn" @click="quickBackup" title="Back up to Google Drive (Ctrl+B)"><Icon name="cloud" size="sm"/><span>Cloud Backup</span><kbd>Ctrl B</kbd></button>
+        <button class="sync-pill" :class="syncTone" @click="syncNow" :title="syncTitle">
+          <span class="sync-dot"></span><span class="sync-text"><b>{{ syncLabel }}</b><small>{{ syncSub }}</small></span>
+        </button>
+        <button class="side-btn" @click="quickBackup" title="Back up to Google Drive (Ctrl+B)"><Icon name="cloud" size="sm"/><span>Drive Backup</span><kbd>Ctrl B</kbd></button>
         <div class="side-row">
           <button class="side-btn" @click="toggleTheme" :title="store.theme === 'dark' ? 'Light mode' : 'Dark mode'"><Icon :name="store.theme === 'dark' ? 'sun' : 'moon'" size="sm"/><span>{{ store.theme === 'dark' ? 'Light' : 'Dark' }}</span></button>
+          <button class="side-btn" @click="signOut" title="Sign out (switch cashier)"><Icon name="user" size="sm"/><span>Sign out</span></button>
           <button class="side-btn" @click="requestQuit" title="Quit (Ctrl+Q)"><Icon name="power" size="sm"/><span>Quit</span></button>
         </div>
         <div class="db-status"><div><span class="dot"></span>Database: Connected</div><div class="muted">{{ store.status }}</div><div class="muted">v2.0 · Rental Billing System</div></div>
@@ -209,9 +258,29 @@ const Shell = {
       <AnalyticsPage v-if="visited.analytics" v-show="store.tab === 'analytics'" :active="store.tab === 'analytics'"/>
       <CustomersPage v-if="visited.customers" v-show="store.tab === 'customers'" :active="store.tab === 'customers'"/>
       <EquipmentPage v-if="store.isOwner && visited.equipment" v-show="store.tab === 'equipment'" :active="store.tab === 'equipment'"/>
+      <TeamPage v-if="store.isOwner && visited.team" v-show="store.tab === 'team'" :active="store.tab === 'team'"/>
     </main>
   </div>`,
 };
+
+// ------------------------------------------------------------------ cloud sync status
+const sync = reactive({ online: false, pending: 0, last_sync: null, error: null, running: false, data_rev: 0 });
+let seenRev = null;
+async function pollSync() {
+  try {
+    const st = await api("sync_status");
+    Object.assign(sync, st);
+    if (seenRev !== null && st.data_rev !== seenRev && store.phase === "app") reloadAll(); // changes arrived from the phone/web
+    seenRev = st.data_rev;
+  } catch (e) { /* ignore */ }
+}
+setInterval(pollSync, 4000);
+async function signOut() {
+  const ok = await confirmBox("Sign out", "Sign out so another cashier can sign in?", { okText: "Sign out", cancelText: "Cancel" });
+  if (!ok) return;
+  await api("logout").catch(() => {});
+  store.user = null; store.isOwner = false; store.tab = "billing"; store.phase = "login";
+}
 
 // ------------------------------------------------------------------ app-wide actions
 function manualRefresh() { reloadAll(); }
