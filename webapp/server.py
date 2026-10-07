@@ -206,6 +206,72 @@ def _sync_status():
     return st
 
 
+# ---------------------------------------------------------------- ID proof photos
+def _photo_prefix(bill_no):
+    import scanner_helper
+    # file names are "<bill>_<name>_<type>.jpg"; the bill part never contains "_"
+    return scanner_helper.id_photo_filename(bill_no, "x", "x").split("_", 1)[0] + "_"
+
+
+def _id_photos(bill_no="", phone=""):
+    """Photos for a bill plus the same customer's earlier bills.
+    Files on this device are sent inline (resized); photos that are only in the
+    cloud are returned as temporary private links."""
+    import base64
+    from cloud.sync_engine import compress_photo
+
+    def local_part(db):
+        conn = db.get_connection()
+        bills = [bill_no] if bill_no else []
+        if phone:
+            for (b,) in conn.execute("SELECT bill_no FROM rentals WHERE phone = ? AND bill_no != ? "
+                                     "AND (cancelled IS NULL OR cancelled = 0) ORDER BY id DESC LIMIT 30",
+                                     (phone, bill_no or "")):
+                if b and b not in bills:
+                    bills.append(b)
+        branch = LS.get_meta(conn, "branch_code") if LS.is_installed(conn) else None
+        return bills, branch
+
+    bills, branch = backend.with_db(local_part)
+    photos, seen = [], set()
+    folder = "ID_Proofs"
+    files = sorted(os.listdir(folder)) if os.path.isdir(folder) else []
+    for b in bills:
+        prefix = _photo_prefix(b)
+        for name in files:
+            if name.startswith(prefix) and name.lower().endswith((".jpg", ".jpeg", ".png")):
+                try:
+                    data = compress_photo(os.path.join(folder, name), max_side=1400, quality=75)
+                except Exception as e:
+                    print(f"[WARN] could not read photo {name}: {e}")
+                    continue
+                photos.append({"bill_no": b, "file": name, "where": "This device",
+                               "src": "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")})
+                seen.add(os.path.splitext(name)[0] + ".jpg")
+
+    cloud = "ok"
+    session = backend.session or (backend.engine.session if backend.engine else None)
+    if not session or not branch:
+        cloud = "not_linked"
+    elif bills:
+        try:
+            quoted = ",".join('"' + b.replace('"', '') + '"' for b in bills)
+            rows = session.select("id_proofs", {"branch_id": f"eq.{branch}", "bill_no": f"in.({quoted})",
+                                                "deleted": "eq.false", "select": "bill_no,file_name,storage_path",
+                                                "order": "updated_at.desc"})
+            rows = [r for r in rows if r["file_name"] not in seen]
+            links = session.signed_urls("id-proofs", [r["storage_path"] for r in rows])
+            for r in rows:
+                if r["storage_path"] in links:
+                    photos.append({"bill_no": r["bill_no"], "file": r["file_name"], "where": "Cloud",
+                                   "src": links[r["storage_path"]]})
+        except CloudError as e:
+            cloud = "offline" if e.offline else f"error: {e}"
+    order = {b: i for i, b in enumerate(bills)}
+    photos.sort(key=lambda p: order.get(p["bill_no"], 999))
+    return {"photos": photos, "cloud": cloud, "bill_no": bill_no}
+
+
 def _sync_now():
     if backend.engine:
         backend.engine.kick()
@@ -346,6 +412,7 @@ API = {
     "init": _init,
     "sync_status": _sync_status,
     "sync_now": _sync_now,
+    "id_photos": _id_photos,
     "team_list": _team_list,
     "team_add": _team_add,
     "team_update": _team_update,

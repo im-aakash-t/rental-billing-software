@@ -488,6 +488,16 @@ const BillingPage = {
 
     // ---------------------------------------------------------------- scanner
     const camera = ref(null);
+    // ---------------------------------------------------------------- ID photo viewer
+    const gallery = reactive({ open: false, loading: false, photos: [], cloud: "ok", bill: "", big: null });
+    async function viewPhotos() {
+      Object.assign(gallery, { open: true, loading: true, photos: [], cloud: "ok", bill: f.bill_no, big: null });
+      const r = await run("id_photos", { bill_no: f.bill_no, phone: f.phone.trim() });
+      gallery.loading = false;
+      if (r === FAIL) { gallery.open = false; return; }
+      gallery.photos = r.photos; gallery.cloud = r.cloud;
+    }
+    const closeGallery = () => { if (gallery.big) gallery.big = null; else gallery.open = false; };
     async function onPhoto(ev) {
       const file = ev.target.files && ev.target.files[0];
       ev.target.value = "";
@@ -633,7 +643,7 @@ const BillingPage = {
 
     return { f, rows, locked, scanStatus, sug, nameSug, filt, tableRows, selectedBill, tableLoading, columns,
       updateTotal, calculateFormBalance, onCode, onQty, onName, pickName, nameKey, hideNameSug,
-      onPhone, onPhone2, pickCustomer, sugKey, hideSug, onScan, onPhoto, camera, isWeb: IS_WEB, clearForm, submit, cancelRental, printBill, backup,
+      onPhone, onPhone2, pickCustomer, sugKey, hideSug, onScan, onPhoto, camera, isWeb: IS_WEB, gallery, viewPhotos, closeGallery, clearForm, submit, cancelRental, printBill, backup,
       clearFilters, selectRow, printList, hasStar, stripStar };
   },
   template: `
@@ -681,6 +691,7 @@ const BillingPage = {
                 <input class="input" data-f="id_proof" v-model="f.id_proof" :disabled="locked" placeholder="e.g. Aadhar">
                 <button class="btn" :disabled="locked || scanStatus === 'scanning'" @click="onScan" :title="isWeb ? 'Take a photo of the ID proof' : 'Scan the ID proof'"><Icon name="scan" size="sm"/>{{ isWeb ? 'Photo' : 'Scan' }}</button>
                 <input ref="camera" type="file" accept="image/*" capture="environment" style="display:none" @change="onPhoto">
+                <button class="btn" @click="viewPhotos" title="See ID photos for this bill and the customer's earlier bills"><Icon name="search" size="sm"/>View</button>
                 <span v-if="scanStatus === 'scanning'" class="scan-status" style="color:var(--warning-text)">Scanning…</span>
                 <span v-else-if="scanStatus === 'saved'" class="scan-status" style="color:var(--success-text)">✓ Saved</span>
               </div>
@@ -775,6 +786,36 @@ const BillingPage = {
       </div>
       <ReturnPanel/>
     </div>
+
+    <!-- ID photo gallery -->
+    <teleport to="body">
+      <div v-if="gallery.open" class="overlay" @mousedown.self="closeGallery" @keydown.esc="closeGallery">
+        <div class="modal gallery" role="dialog" aria-modal="true">
+          <div class="gallery-head">
+            <div><h2>ID Proof Photos</h2><div class="t-muted" style="font-size:12.5px">Bill {{ gallery.bill }}{{ f.name ? ' · ' + f.name : '' }} — this bill first, then the customer's earlier bills</div></div>
+            <button class="btn ghost icon-only" @click="gallery.open = false" aria-label="Close"><Icon name="x"/></button>
+          </div>
+          <div class="gallery-body">
+            <div v-if="gallery.loading" class="empty"><div>Loading photos…</div></div>
+            <template v-else>
+              <div v-if="gallery.cloud === 'offline'" class="lockbar" style="margin-bottom:12px"><Icon name="warn" size="sm"/>No internet: showing only photos stored on this device.</div>
+              <div v-else-if="gallery.cloud !== 'ok' && gallery.cloud !== 'not_linked'" class="lockbar" style="margin-bottom:12px"><Icon name="warn" size="sm"/>Cloud photos unavailable ({{ gallery.cloud }}).</div>
+              <div v-if="!gallery.photos.length" class="empty"><Icon name="scan"/><div>No ID photos yet for this bill or this customer.</div></div>
+              <div class="photo-grid">
+                <button v-for="p in gallery.photos" :key="p.file + p.where" class="photo-tile" @click="gallery.big = p">
+                  <img :src="p.src" :alt="p.file" loading="lazy">
+                  <span class="photo-cap"><b>{{ p.bill_no }}</b><span v-if="p.bill_no === gallery.bill" class="pill green" style="height:18px">This bill</span><small>{{ p.file.split('_').slice(2).join('_').replace('.jpeg', '').replace('.jpg', '').replace('.png', '') || 'ID' }} · {{ p.where }}</small></span>
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+        <div v-if="gallery.big" class="photo-big" @click="gallery.big = null">
+          <img :src="gallery.big.src" :alt="gallery.big.file">
+          <div class="photo-big-cap">{{ gallery.big.file }} · {{ gallery.big.where }} <span class="t-muted">(tap to close)</span></div>
+        </div>
+      </div>
+    </teleport>
   </div>`,
 };
 

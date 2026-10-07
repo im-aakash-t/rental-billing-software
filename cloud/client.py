@@ -135,6 +135,20 @@ class Session:
         _request("POST", f"/storage/v1/object/{bucket}/{urllib.parse.quote(path)}", raw=data, token=self.token(),
                  content_type=content_type, headers={"x-upsert": "true"}, timeout=120)
 
+    def signed_urls(self, bucket, paths, expires_in=3600):
+        """Temporary links for private files (photos load straight from Supabase)."""
+        if not paths:
+            return {}
+        rows = _request("POST", f"/storage/v1/object/sign/{bucket}", {"expiresIn": expires_in, "paths": list(paths)},
+                        token=self.token())
+        out = {}
+        for r in rows or []:
+            link = r.get("signedURL") or r.get("signedUrl")
+            if link and not r.get("error"):
+                # file names can contain spaces: encode them so every client accepts the link
+                out[r.get("path")] = config.SUPABASE_URL + "/storage/v1" + urllib.parse.quote(link, safe="/?=&:%-._~")
+        return out
+
     def profile(self):
         rows = self.select("profiles", {"user_id": f"eq.{self.user_id}", "select": "*"})
         return rows[0] if rows else None
