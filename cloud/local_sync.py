@@ -42,18 +42,26 @@ def install(conn):
         extra_old = "OLD.rental_id" if t != "rentals" and t != "customers" else "NULL"
         if t == "customers":
             extra_old = "OLD.phone"
+        # NOTE: no "INSERT OR IGNORE" in trigger bodies - SQLite applies the OUTER
+        # statement's conflict policy inside triggers, so an app UPSERT
+        # (INSERT ... ON CONFLICT DO UPDATE) would turn a duplicate into an error.
         c.executescript(f"""
-            CREATE TRIGGER IF NOT EXISTS sync_{t}_ins AFTER INSERT ON {t} WHEN {_NOT_APPLYING}
+            DROP TRIGGER IF EXISTS sync_{t}_ins;
+            DROP TRIGGER IF EXISTS sync_{t}_upd;
+            DROP TRIGGER IF EXISTS sync_{t}_del;
+            CREATE TRIGGER sync_{t}_ins AFTER INSERT ON {t} WHEN {_NOT_APPLYING}
             BEGIN
-              INSERT OR IGNORE INTO sync_ids (tbl, local_id, uuid) VALUES ('{t}', NEW.id, {_UUID_SQL});
+              INSERT INTO sync_ids (tbl, local_id, uuid) SELECT '{t}', NEW.id, {_UUID_SQL}
+              WHERE NOT EXISTS (SELECT 1 FROM sync_ids WHERE tbl = '{t}' AND local_id = NEW.id);
               INSERT INTO sync_outbox (tbl, local_id, op) VALUES ('{t}', NEW.id, 'U');
             END;
-            CREATE TRIGGER IF NOT EXISTS sync_{t}_upd AFTER UPDATE ON {t} WHEN {_NOT_APPLYING}
+            CREATE TRIGGER sync_{t}_upd AFTER UPDATE ON {t} WHEN {_NOT_APPLYING}
             BEGIN
-              INSERT OR IGNORE INTO sync_ids (tbl, local_id, uuid) VALUES ('{t}', NEW.id, {_UUID_SQL});
+              INSERT INTO sync_ids (tbl, local_id, uuid) SELECT '{t}', NEW.id, {_UUID_SQL}
+              WHERE NOT EXISTS (SELECT 1 FROM sync_ids WHERE tbl = '{t}' AND local_id = NEW.id);
               INSERT INTO sync_outbox (tbl, local_id, op) VALUES ('{t}', NEW.id, 'U');
             END;
-            CREATE TRIGGER IF NOT EXISTS sync_{t}_del AFTER DELETE ON {t} WHEN {_NOT_APPLYING}
+            CREATE TRIGGER sync_{t}_del AFTER DELETE ON {t} WHEN {_NOT_APPLYING}
             BEGIN
               INSERT INTO sync_outbox (tbl, local_id, op, uuid, extra)
               VALUES ('{t}', OLD.id, 'D',

@@ -112,8 +112,8 @@ create table if not exists public.rentals (
   machines      text,
   rents         text,
   quantities    text,
-  total         double precision not null default 0,
-  advance       double precision not null default 0,
+  total         text,                       -- text on purpose: the app stores what was typed
+  advance       text,                       -- (e.g. '500', '', '500A'); numbers round-trip exactly
   date          text not null,
   time          text not null,
   vehicle       text,
@@ -163,7 +163,8 @@ create table if not exists public.returns (
   created_at          text,
   updated_at          timestamptz not null default clock_timestamp(),
   updated_by          text,
-  deleted             boolean not null default false
+  deleted             boolean not null default false,
+  unique (rental_id)                      -- the app keeps one return record per bill
 );
 
 create table if not exists public.installments (
@@ -270,7 +271,6 @@ begin
 end $$;
 
 create index if not exists rental_items_rental_idx on public.rental_items (rental_id);
-create index if not exists returns_rental_idx on public.returns (rental_id);
 create index if not exists installments_rental_idx on public.installments (rental_id);
 create index if not exists refunds_rental_idx on public.refunds_history (rental_id);
 
@@ -307,3 +307,35 @@ create policy id_proofs_insert on storage.objects for insert to authenticated
   with check (bucket_id = 'id-proofs' and public.can_access((storage.foldername(name))[1]));
 create policy id_proofs_update on storage.objects for update to authenticated
   using (bucket_id = 'id-proofs' and public.can_access((storage.foldername(name))[1]));
+
+-- --------------------------------------------------------------- owner: reset a login's password
+create or replace function public.admin_reset_password(p_user uuid, p_password text)
+returns void language plpgsql security definer set search_path = public, extensions, auth as $$
+begin
+  if not public.is_owner() then
+    raise exception 'Only the owner can reset passwords';
+  end if;
+  if length(coalesce(p_password, '')) < 6 then
+    raise exception 'Password must be at least 6 characters';
+  end if;
+  update auth.users set encrypted_password = extensions.crypt(p_password, extensions.gen_salt('bf')),
+                        updated_at = now()
+   where id = p_user;
+end $$;
+
+revoke execute on function public.admin_reset_password(uuid, text) from public, anon;
+revoke execute on function public.admin_set_profile(uuid, text, text, boolean, text) from public, anon;
+grant execute on function public.admin_reset_password(uuid, text) to authenticated;
+grant execute on function public.admin_set_profile(uuid, text, text, boolean, text) to authenticated;
+
+-- --------------------------------------------------------------- table privileges
+-- (Row-level security above decides WHICH rows; these decide which tables the
+-- signed-in app may use at all. Nothing is granted to anonymous visitors.)
+grant usage on schema public to authenticated;
+grant select on public.branches, public.profiles to authenticated;
+grant select, insert, update on public.rentals, public.rental_items, public.returns, public.installments,
+  public.refunds_history, public.customers, public.materials, public.id_proofs, public.sync_status to authenticated;
+revoke all on public.branches, public.profiles, public.rentals, public.rental_items, public.returns,
+  public.installments, public.refunds_history, public.customers, public.materials, public.id_proofs,
+  public.sync_status from anon;
+grant execute on function public.is_owner(), public.my_branch(), public.can_access(text) to authenticated;
