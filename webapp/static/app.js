@@ -275,7 +275,7 @@ const Shell = {
         <span class="spacer"></span>
         <button class="btn" @click="manualRefresh" title="Refresh all data (F5)"><Icon name="refresh" size="sm"/>Refresh Data<kbd>F5</kbd></button>
       </header>
-      <div v-show="store.tab === 'billing'" class="page" style="padding-bottom:16px"><BillingPage :active="store.tab === 'billing'"/></div>
+      <div v-show="store.tab === 'billing'" class="page"><BillingPage :active="store.tab === 'billing'"/></div>
       <PendingReturnsPage v-if="visited.pending_returns" v-show="store.tab === 'pending_returns'" :active="store.tab === 'pending_returns'"/>
       <PendingPaymentsPage v-if="visited.pending" v-show="store.tab === 'pending'" :active="store.tab === 'pending'"/>
       <DailyPage v-if="visited.daily" v-show="store.tab === 'daily'" :active="store.tab === 'daily'"/>

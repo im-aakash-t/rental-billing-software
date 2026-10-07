@@ -5,7 +5,7 @@ from PIL import Image, ImageDraw
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RES = os.path.join(ROOT, "mobile", "android", "app", "src", "main", "res")
-BG = (14, 20, 32)          # #0E1420, the app's sidebar colour
+BG = (11, 11, 11)          # #0B0B0B, the app's sidebar colour
 
 with Image.open(os.path.join(ROOT, "webapp", "app.ico")) as im:
     icon = im.convert("RGBA").resize((512, 512), Image.LANCZOS)
@@ -28,7 +28,7 @@ for folder, size in {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdp
 
 with open(os.path.join(RES, "values", "ic_launcher_background.xml"), "w", encoding="utf-8") as f:
     f.write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n'
-            '    <color name="ic_launcher_background">#0E1420</color>\n</resources>\n')
+            '    <color name="ic_launcher_background">#0B0B0B</color>\n</resources>\n')
 
 # Splash screens: dark background with the icon in the middle
 for dirpath, _, files in os.walk(RES):

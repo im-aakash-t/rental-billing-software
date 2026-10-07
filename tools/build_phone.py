@@ -70,7 +70,7 @@ def build(native=False):
                         '<script src="static/logic.js"></script>\n  <script src="bridge.js"></script>')
     html = html.replace('<meta name="viewport" content="width=device-width, initial-scale=1">',
                         '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'
-                        '  <meta name="theme-color" content="#0E1420">\n'
+                        '  <meta name="theme-color" content="#0B0B0B">\n'
                         '  <meta name="apple-mobile-web-app-capable" content="yes">\n'
                         '  <meta name="mobile-web-app-capable" content="yes">\n'
                         '  <link rel="manifest" href="manifest.webmanifest">\n'
@@ -116,7 +116,7 @@ def build(native=False):
             im.resize((size, size), Image.LANCZOS).save(os.path.join(OUT, f"icon-{size}.png"))
     with open(os.path.join(OUT, "manifest.webmanifest"), "w", encoding="utf-8") as f:
         f.write('{"name": "Rental Billing", "short_name": "Rental Billing", "start_url": "./", "display": "standalone",'
-                ' "background_color": "#0B1020", "theme_color": "#0E1420",'
+                ' "background_color": "#0A0A0A", "theme_color": "#0B0B0B",'
                 ' "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},'
                 ' {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"}]}')
 

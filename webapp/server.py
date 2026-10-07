@@ -539,7 +539,7 @@ def main(open_window=True):
     import webview
     window = webview.create_window(
         APP_TITLE, url, width=1280, height=720, min_size=(1024, 650),
-        maximized=True, background_color="#F4F5F7", text_select=True)
+        maximized=True, background_color="#F6F6F3", text_select=True)
     backend.window = window
 
     def on_closing():

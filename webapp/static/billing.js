@@ -261,91 +261,82 @@ const ReturnPanel = {
       onSubmitClick, openMoney, onSplit, onPrint, unfreeze };
   },
   template: `
-  <div class="card">
-    <div class="card-head">
+  <div class="card ret-card">
+    <div class="card-head ret-head">
       <h3><Icon name="undo"/>Return Processing</h3>
       <span v-if="f.rental_id" class="pill blue">{{ info.bill_no }} · {{ info.name }}</span>
-      <span v-else class="t-muted" style="font-size:12.5px">Select a bill to process its return</span>
+      <span v-else class="t-muted" style="font-size:12px">Select a bill to process its return</span>
+      <span v-if="f.rental_id && frozen" class="pill green"><Icon name="check" size="sm"/>Settled · locked</span>
+      <button v-if="frozen" class="btn sm" @click="unfreeze" title="All items returned and the balance is settled. Click to edit anyway."><Icon name="edit" size="sm"/>Edit Return (Unfreeze)</button>
       <span class="spacer"></span>
-      <span v-if="f.rental_id && frozen" class="pill green"><Icon name="check" size="sm"/>Settled</span>
+      <button class="btn sm primary" :disabled="frozen" @click="onSubmitClick"><Icon name="check" size="sm"/>Submit Return</button>
+      <button class="btn sm" :disabled="frozen" @click="onSplit"><Icon name="scissors" size="sm"/>Split &amp; Close</button>
+      <button class="btn sm" @click="onPrint('Estimate-Bill.png')"><Icon name="file" size="sm"/>Estimate</button>
+      <button class="btn sm" @click="onPrint('Tax-Invoice.png')"><Icon name="receipt" size="sm"/>Tax Inv.</button>
     </div>
-    <div class="card-body">
-      <div v-if="frozen" class="frozen-note">
-        <Icon name="lock" size="sm"/>All items returned and the balance is settled. The return is locked.
-        <button class="btn sm" @click="unfreeze"><Icon name="edit" size="sm"/>Edit Return (Unfreeze)</button>
-      </div>
-      <div class="return-grid">
-        <div class="ret-fields">
-          <div class="field"><label>Return Date</label>
-            <div class="with-btn">
-              <input class="input tnum" data-f="ret.date" v-model="f.date" :disabled="frozen" @input="onDateTime" @blur="onDateTime" placeholder="dd-mm-yy">
-              <DatePicker icon-only :model-value="f.date" :disabled="frozen" @change="v => { f.date = v; onDateTime(); }"/>
-            </div>
-          </div>
-          <div class="field"><label>Return Time</label><input class="input tnum" data-f="ret.time" v-model="f.time" :disabled="frozen" @input="onDateTime" @blur="onDateTime" placeholder="hh:mm AM"></div>
-          <div class="field"><label>Rental Days</label><input class="input num" data-f="ret.rental_days" :value="f.rental_days" readonly></div>
-          <div class="field"><label>Due Amount</label><input class="input num readonly-strong" data-f="ret.due" :value="f.due" readonly></div>
-
-          <div class="field"><label>Damage</label><input class="input num" data-f="ret.damage" v-model="f.damage" :disabled="frozen" @input="onDamage"></div>
-          <div class="field"><div class="flabel"><span>Deduction</span>
-              <span class="ded-days" style="margin-left:auto"><input class="input center" data-f="ret.deduction_days" v-model="dedDays" :disabled="frozen" @input="onDeductionDays" placeholder="days" title="Deduct this many days of rent"></span></div>
-            <input class="input num" data-f="ret.deduction" v-model="f.deduction" :disabled="frozen" @input="onDeductionField">
-          </div>
-          <div class="field"><label>Advance</label><input class="input num" data-f="ret.advance" :value="f.advance" readonly></div>
-          <div class="field"><label>Past Due</label><input class="input num t-red" data-f="ret.past_due" :value="f.past_due" readonly></div>
-
-          <div class="field"><label>Payment Mode</label>
-            <Seg v-model="f.payment_mode" data-f="ret.payment_mode" :disabled="frozen" :options="[{value:'Cash',label:'Cash'},{value:'UPI',label:'UPI'}]"/>
-          </div>
-          <div class="field"><div class="flabel">Refund
-              <button class="btn ghost sm icon-only mini-add" title="Add refund" :disabled="frozen" @click="openMoney('refund')"><Icon name="plus" size="sm"/></button></div>
-            <input class="input num t-purple" data-f="ret.refund" :value="f.refund" readonly>
-          </div>
-          <div class="field"><div class="flabel">Paid Now
-              <button class="btn ghost sm icon-only mini-add" title="Add installment payment" :disabled="frozen" @click="openMoney('payment')"><Icon name="plus" size="sm"/></button></div>
-            <input class="input num" data-f="ret.amount_paid" :value="f.amount_paid" readonly>
-          </div>
-          <div class="balance-box" :class="balColor">
-            <span class="bl">Net Balance</span><span class="bv" data-f="ret.balance">₹ {{ f.balance }}</span>
+    <div class="ret-body">
+      <div class="ret-fields six">
+        <div class="field"><label>Return Date</label>
+          <div class="with-btn">
+            <input class="input tnum" data-f="ret.date" v-model="f.date" :disabled="frozen" @input="onDateTime" @blur="onDateTime" placeholder="dd-mm-yy">
+            <DatePicker icon-only small :model-value="f.date" :disabled="frozen" @change="v => { f.date = v; onDateTime(); }"/>
           </div>
         </div>
-        <div class="ret-two">
-          <div class="subcard">
-            <div class="subcard-head"><Icon name="package" size="sm"/>Return Quantities</div>
-            <div class="subcard-body">
-              <div v-if="!usedSteppers.length" class="t-muted" style="padding:6px 0">No items loaded.</div>
-              <div v-for="(s, i) in usedSteppers" :key="i" class="stepper-row">
-                <span class="s-label" :title="s.label">{{ s.label }}</span>
-                <div class="stepper">
-                  <button :disabled="!steppersEnabled" @click="dec(s)"><Icon name="minus" size="sm"/></button>
-                  <input v-model="s.value" data-f="ret.stepper" :disabled="!steppersEnabled" @input="validateStepper(s)">
-                  <button :disabled="!steppersEnabled" @click="inc(s)"><Icon name="plus" size="sm"/></button>
-                </div>
+        <div class="field"><label>Return Time</label><input class="input tnum" data-f="ret.time" v-model="f.time" :disabled="frozen" @input="onDateTime" @blur="onDateTime" placeholder="hh:mm AM"></div>
+        <div class="field"><label>Rental Days</label><input class="input num" data-f="ret.rental_days" :value="f.rental_days" readonly></div>
+        <div class="field"><label>Due Amount</label><input class="input num readonly-strong" data-f="ret.due" :value="f.due" readonly></div>
+        <div class="field"><label>Advance</label><input class="input num" data-f="ret.advance" :value="f.advance" readonly></div>
+        <div class="field"><label>Past Due</label><input class="input num t-red" data-f="ret.past_due" :value="f.past_due" readonly></div>
+
+        <div class="field"><label>Damage</label><input class="input num" data-f="ret.damage" v-model="f.damage" :disabled="frozen" @input="onDamage"></div>
+        <div class="field"><div class="flabel"><span>Deduction</span>
+            <span class="ded-days" style="margin-left:auto"><input class="input center" data-f="ret.deduction_days" v-model="dedDays" :disabled="frozen" @input="onDeductionDays" placeholder="days" title="Deduct this many days of rent"></span></div>
+          <input class="input num" data-f="ret.deduction" v-model="f.deduction" :disabled="frozen" @input="onDeductionField">
+        </div>
+        <div class="field"><label>Payment Mode</label>
+          <Seg v-model="f.payment_mode" data-f="ret.payment_mode" :disabled="frozen" :options="[{value:'Cash',label:'Cash'},{value:'UPI',label:'UPI'}]"/>
+        </div>
+        <div class="field"><div class="flabel">Refund
+            <button class="btn ghost sm icon-only mini-add" title="Add refund" :disabled="frozen" @click="openMoney('refund')"><Icon name="plus" size="sm"/></button></div>
+          <input class="input num t-purple" data-f="ret.refund" :value="f.refund" readonly>
+        </div>
+        <div class="field"><div class="flabel">Paid Now
+            <button class="btn ghost sm icon-only mini-add" title="Add installment payment" :disabled="frozen" @click="openMoney('payment')"><Icon name="plus" size="sm"/></button></div>
+          <input class="input num" data-f="ret.amount_paid" :value="f.amount_paid" readonly>
+        </div>
+        <div class="balance-box" :class="balColor">
+          <span class="bl">Net Balance</span><span class="bv" data-f="ret.balance">₹ {{ f.balance }}</span>
+        </div>
+      </div>
+      <div class="ret-two">
+        <div class="subcard">
+          <div class="subcard-head"><Icon name="package" size="sm"/>Return Quantities</div>
+          <div class="subcard-body ret-scroll">
+            <div v-if="!usedSteppers.length" class="t-muted" style="padding:4px 0">No items loaded.</div>
+            <div v-for="(s, i) in usedSteppers" :key="i" class="stepper-row">
+              <span class="s-label" :title="s.label">{{ s.label }}</span>
+              <div class="stepper">
+                <button :disabled="!steppersEnabled" @click="dec(s)"><Icon name="minus" size="sm"/></button>
+                <input v-model="s.value" data-f="ret.stepper" :disabled="!steppersEnabled" @input="validateStepper(s)">
+                <button :disabled="!steppersEnabled" @click="inc(s)"><Icon name="plus" size="sm"/></button>
               </div>
             </div>
           </div>
-          <div class="subcard">
-            <div class="subcard-head"><Icon name="history" size="sm"/>Payment History<span class="spacer"></span>
-              <Seg v-model="histMode" :options="[{value:'Refund',label:'Refund'},{value:'Paid',label:'Paid'},{value:'Return',label:'Return'}]"/>
-            </div>
-            <div class="subcard-body" style="max-height:150px;overflow:auto;padding-top:2px">
-              <table class="mini">
-                <thead><tr><th>Date &amp; Time</th><th style="text-align:right">Amount</th><th>Mode</th><th>Cashier</th></tr></thead>
-                <tbody>
-                  <tr v-for="(h, i) in histRows" :key="i"><td class="tnum">{{ h[0] }}</td><td class="num" style="text-align:right">{{ h[1] }}</td><td>{{ h[2] }}</td><td>{{ h[3] }}</td></tr>
-                  <tr v-if="!histRows.length"><td colspan="4" class="t-muted">No entries.</td></tr>
-                </tbody>
-              </table>
-            </div>
+        </div>
+        <div class="subcard">
+          <div class="subcard-head"><Icon name="history" size="sm"/>Payment History<span class="spacer"></span>
+            <Seg v-model="histMode" :options="[{value:'Refund',label:'Refund'},{value:'Paid',label:'Paid'},{value:'Return',label:'Return'}]"/>
+          </div>
+          <div class="subcard-body ret-scroll" style="padding-top:0">
+            <table class="mini">
+              <thead><tr><th>Date &amp; Time</th><th style="text-align:right">Amount</th><th>Mode</th><th>Cashier</th></tr></thead>
+              <tbody>
+                <tr v-for="(h, i) in histRows" :key="i"><td class="tnum">{{ h[0] }}</td><td class="num" style="text-align:right">{{ h[1] }}</td><td>{{ h[2] }}</td><td>{{ h[3] }}</td></tr>
+                <tr v-if="!histRows.length"><td colspan="4" class="t-muted">No entries.</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
-      </div>
-      <div class="ret-actions">
-        <button class="btn primary" :disabled="frozen" @click="onSubmitClick"><Icon name="check" size="sm"/>Submit Return</button>
-        <button class="btn" :disabled="frozen" @click="onSplit"><Icon name="scissors" size="sm"/>Split &amp; Close</button>
-        <span style="flex:1"></span>
-        <button class="btn" @click="onPrint('Estimate-Bill.png')"><Icon name="file" size="sm"/>Estimate</button>
-        <button class="btn" @click="onPrint('Tax-Invoice.png')"><Icon name="receipt" size="sm"/>Tax Invoice</button>
       </div>
     </div>
   </div>`,
@@ -644,136 +635,124 @@ const BillingPage = {
     return { f, rows, locked, scanStatus, sug, nameSug, filt, tableRows, selectedBill, tableLoading, columns,
       updateTotal, calculateFormBalance, onCode, onQty, onName, pickName, nameKey, hideNameSug,
       onPhone, onPhone2, pickCustomer, sugKey, hideSug, onScan, onPhoto, camera, isWeb: IS_WEB, gallery, viewPhotos, closeGallery, clearForm, submit, cancelRental, printBill, backup,
-      clearFilters, selectRow, printList, hasStar, stripStar };
+      clearFilters, selectRow, printList, hasStar, stripStar, reloadAll };
   },
   template: `
-  <div class="billing">
-    <!-- ================= LEFT: bill form ================= -->
-    <div class="billing-left">
-      <div class="card">
-        <div class="card-head">
-          <div class="bill-head">
-            <span class="t-muted" style="font-size:12px;font-weight:600">BILL</span>
-            <span class="bill-no" data-f="bill_no">{{ f.bill_no || '—' }}</span>
-            <span v-if="f.mode === 'edit'" class="pill amber"><span class="dot"></span>Saved bill</span>
-            <span v-else class="pill green"><span class="dot"></span>New bill</span>
-          </div>
-          <span class="spacer"></span>
-          <button class="btn sm" @click="clearForm" title="Start a new bill (Ctrl+N)"><Icon name="plus" size="sm"/>New</button>
-        </div>
-        <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
-          <div v-if="locked" class="lockbar"><Icon name="lock" size="sm"/>Viewing a saved bill. Fields are locked.
-            <button class="btn sm" @click="locked = false"><Icon name="edit" size="sm"/>Edit Record</button>
-          </div>
-          <div class="form-grid">
-            <div class="field span-2"><label>Customer Name<span class="req">*</span></label>
-              <input class="input" data-f="name" v-model="f.name" :disabled="locked" placeholder="Enter customer full name"></div>
-            <div class="field suggest-anchor"><label>Phone<span class="req">*</span></label>
-              <input class="input tnum" data-f="phone" v-model="f.phone" :disabled="locked" data-sug="phone" placeholder="10-digit mobile"
-                     @input="onPhone" @keydown="sugKey('phone', $event)" @blur="hideSug" @focus="sug.phone.length && f.phone.trim().length >= 3 ? sug.open = 'phone' : null">
-              <div v-if="sug.open === 'phone' && sug.phone.length" class="suggest">
-                <button v-for="(s, i) in sug.phone" :key="s.label" :class="{ hi: i === sug.hi }" @mousedown.prevent="pickCustomer(s, false)">
-                  <span class="tnum">{{ s.phone }}</span><span class="s-sub">{{ s.name }}</span></button>
-              </div>
-            </div>
-            <div class="field suggest-anchor"><label>Phone 2</label>
-              <input class="input tnum" data-f="phone2" v-model="f.phone2" :disabled="locked" placeholder="Optional"
-                     @input="onPhone2" @keydown="sugKey('phone2', $event)" @blur="hideSug">
-              <div v-if="sug.open === 'phone2' && sug.phone2.length" class="suggest">
-                <button v-for="(s, i) in sug.phone2" :key="s.label" :class="{ hi: i === sug.hi }" @mousedown.prevent="pickCustomer(s, true)">
-                  <span class="tnum">{{ s.phone }}</span><span class="s-sub">{{ s.name }}</span></button>
-              </div>
-            </div>
-            <div class="field span-2"><label>Address</label>
-              <textarea class="textarea" data-f="address" rows="2" v-model="f.address" :disabled="locked"></textarea></div>
-            <div class="field span-2"><label>ID Proof</label>
-              <div class="with-btn" style="align-items:center">
-                <input class="input" data-f="id_proof" v-model="f.id_proof" :disabled="locked" placeholder="e.g. Aadhar">
-                <button class="btn" :disabled="locked || scanStatus === 'scanning'" @click="onScan" :title="isWeb ? 'Take a photo of the ID proof' : 'Scan the ID proof'"><Icon name="scan" size="sm"/>{{ isWeb ? 'Photo' : 'Scan' }}</button>
-                <input ref="camera" type="file" accept="image/*" capture="environment" style="display:none" @change="onPhoto">
-                <button class="btn" @click="viewPhotos" title="See ID photos for this bill and the customer's earlier bills"><Icon name="search" size="sm"/>View</button>
-                <span v-if="scanStatus === 'scanning'" class="scan-status" style="color:var(--warning-text)">Scanning…</span>
-                <span v-else-if="scanStatus === 'saved'" class="scan-status" style="color:var(--success-text)">✓ Saved</span>
-              </div>
-            </div>
-          </div>
-        </div>
+  <div class="billing dense">
+    <!-- ================= LEFT: bill form (one compact card) ================= -->
+    <div class="billing-left card">
+      <div class="bf-head">
+        <span class="bf-label">BILL</span>
+        <span class="bill-no" data-f="bill_no">{{ f.bill_no || '—' }}</span>
+        <span v-if="f.mode === 'edit'" class="pill amber"><span class="dot"></span>Saved bill</span>
+        <span v-else class="pill green"><span class="dot"></span>New bill</span>
+        <span class="spacer"></span>
+        <button v-if="locked" class="btn sm" @click="locked = false" title="Viewing a saved bill: fields are locked"><Icon name="lock" size="sm"/>Edit Record</button>
+        <button class="btn sm" @click="clearForm" title="Start a new bill (Ctrl+N)"><Icon name="plus" size="sm"/>New</button>
       </div>
-
-      <div class="card">
-        <div class="card-head"><h3><Icon name="package"/>Machine Details</h3></div>
-        <div class="card-body" style="padding-top:10px">
-          <table class="machine-table">
-            <thead><tr><th></th><th style="width:64px">Code</th><th>Machine Name</th><th style="width:42px;text-align:center">Spare</th><th style="width:54px">Qty</th><th style="width:86px">Rent/Day</th></tr></thead>
-            <tbody>
-              <tr v-for="(r, i) in rows" :key="i">
-                <td class="idx">{{ i + 1 }}</td>
-                <td><input class="input" data-f="row.code" v-model="r.code" :disabled="locked" @input="onCode(i)"></td>
-                <td class="suggest-anchor">
-                  <input class="input" data-f="row.name" v-model="r.name" :disabled="locked" @input="onName(i)" @keydown="nameKey(i, $event)" @blur="hideNameSug">
-                  <div v-if="nameSug.row === i" class="suggest">
-                    <button v-for="(n, k) in nameSug.items" :key="n + k" :class="{ hi: k === nameSug.hi }" @mousedown.prevent="pickName(i, n)">{{ n }}</button>
-                  </div>
-                </td>
-                <td style="text-align:center"><label class="check" style="justify-content:center"><input type="checkbox" data-f="row.spare" v-model="r.spare" :disabled="locked"></label></td>
-                <td><input class="input num" data-f="row.qty" v-model="r.qty" :disabled="locked" @input="onQty(i)"></td>
-                <td><input class="input num" data-f="row.rent" v-model="r.rent" :disabled="locked" @input="updateTotal"></td>
-              </tr>
-            </tbody>
-          </table>
+      <div class="bf-body">
+        <!-- customer -->
+        <div class="bf-grid c3">
+          <div class="field span2"><label>Customer Name<span class="req">*</span></label>
+            <input class="input" data-f="name" v-model="f.name" :disabled="locked" placeholder="Customer full name"></div>
+          <div class="field suggest-anchor"><label>Phone<span class="req">*</span></label>
+            <input class="input tnum" data-f="phone" v-model="f.phone" :disabled="locked" data-sug="phone" placeholder="10-digit mobile"
+                   @input="onPhone" @keydown="sugKey('phone', $event)" @blur="hideSug" @focus="sug.phone.length && f.phone.trim().length >= 3 ? sug.open = 'phone' : null">
+            <div v-if="sug.open === 'phone' && sug.phone.length" class="suggest">
+              <button v-for="(s, i) in sug.phone" :key="s.label" :class="{ hi: i === sug.hi }" @mousedown.prevent="pickCustomer(s, false)">
+                <span class="tnum">{{ s.phone }}</span><span class="s-sub">{{ s.name }}</span></button>
+            </div>
+          </div>
+          <div class="field suggest-anchor"><label>Phone 2</label>
+            <input class="input tnum" data-f="phone2" v-model="f.phone2" :disabled="locked" placeholder="Optional"
+                   @input="onPhone2" @keydown="sugKey('phone2', $event)" @blur="hideSug">
+            <div v-if="sug.open === 'phone2' && sug.phone2.length" class="suggest">
+              <button v-for="(s, i) in sug.phone2" :key="s.label" :class="{ hi: i === sug.hi }" @mousedown.prevent="pickCustomer(s, true)">
+                <span class="tnum">{{ s.phone }}</span><span class="s-sub">{{ s.name }}</span></button>
+            </div>
+          </div>
+          <div class="field span2"><label>ID Proof
+              <span v-if="scanStatus === 'scanning'" class="scan-status" style="color:var(--warning-text)">· Scanning…</span>
+              <span v-else-if="scanStatus === 'saved'" class="scan-status" style="color:var(--success-text)">· ✓ Saved</span></label>
+            <div class="with-btn">
+              <input class="input" data-f="id_proof" v-model="f.id_proof" :disabled="locked" placeholder="e.g. Aadhar">
+              <button class="btn" :disabled="locked || scanStatus === 'scanning'" @click="onScan" :title="isWeb ? 'Take a photo of the ID proof' : 'Scan the ID proof'"><Icon name="scan" size="sm"/>{{ isWeb ? 'Photo' : 'Scan' }}</button>
+              <input ref="camera" type="file" accept="image/*" capture="environment" style="display:none" @change="onPhoto">
+              <button class="btn" @click="viewPhotos" title="See ID photos for this bill and the customer's earlier bills"><Icon name="search" size="sm"/>View</button>
+            </div>
+          </div>
+          <div class="field span3"><label>Address</label>
+            <textarea class="textarea" data-f="address" rows="2" v-model="f.address" :disabled="locked"></textarea></div>
         </div>
-      </div>
 
-      <div class="card">
-        <div class="card-head"><h3><Icon name="wallet"/>Summary</h3></div>
-        <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
-          <div class="form-grid">
-            <div class="field"><label>Date</label>
-              <div class="with-btn"><input class="input tnum" data-f="date" v-model="f.date" :disabled="locked" placeholder="dd-mm-yy">
-                <DatePicker icon-only :model-value="f.date" :disabled="locked" @change="v => f.date = v"/></div></div>
-            <div class="field"><label>Time</label><input class="input tnum" data-f="time" v-model="f.time" :disabled="locked" placeholder="hh:mm AM"></div>
-            <div class="field"><label>Vehicle No.</label><input class="input" data-f="vehicle" v-model="f.vehicle" :disabled="locked"></div>
-            <div class="field"><label>Cashier Name<span class="req">*</span></label><input class="input" data-f="cashier_name" v-model="f.cashier_name" :disabled="locked"></div>
-            <div class="field"><label>Daily Rent</label><input class="input num" data-f="total" v-model="f.total" :disabled="locked" @input="calculateFormBalance"></div>
-            <div class="field"><label>Advance Paid</label><input class="input num" data-f="advance" v-model="f.advance" :disabled="locked" @input="calculateFormBalance"></div>
-            <div class="field"><label>Advance Mode</label>
-              <Seg v-model="f.payment_mode" data-f="payment_mode" :disabled="locked" :options="[{value:'Cash',label:'Cash'},{value:'UPI',label:'UPI'}]"/></div>
-          </div>
-          <div class="form-grid three">
-            <div class="balance-box" :class="f.pending === 'Yes' ? 'amber' : ''"><span class="bl">Pending Returns</span><span class="bv" data-f="pending" style="font-size:15px">{{ f.pending }}</span></div>
-            <div class="balance-box" :class="parseFloat(f.past_due) > 0 ? 'red' : ''"><span class="bl">Past Due</span><span class="bv" data-f="past_due" style="font-size:15px">₹ {{ f.past_due }}</span></div>
-            <div class="balance-box" :class="parseFloat(f.balance) > 0 ? 'red' : (parseFloat(f.balance) < 0 ? '' : 'green')"><span class="bl">Balance Due</span><span class="bv" data-f="balance" style="font-size:15px">₹ {{ f.balance }}</span></div>
-          </div>
-          <div class="action-bar">
-            <button class="btn primary" @click="submit" title="Ctrl+S"><Icon name="save" size="sm"/>Submit</button>
-            <button class="btn" @click="clearForm" title="Ctrl+N"><Icon name="eraser" size="sm"/>Clear</button>
-            <button class="btn danger" @click="cancelRental"><Icon name="ban" size="sm"/>Cancel</button>
-            <button class="btn" @click="printBill('Estimate-Bill.png')"><Icon name="file" size="sm"/>Estimate</button>
-            <button class="btn" @click="printBill('Tax-Invoice.png')"><Icon name="receipt" size="sm"/>Tax Inv.</button>
-            <button class="btn" @click="backup" title="Upload to the cloud now (Ctrl+B)"><Icon name="cloud" size="sm"/>Sync</button>
-          </div>
+        <!-- machines -->
+        <table class="machine-table">
+          <thead><tr><th></th><th style="width:60px">Code</th><th>Machine Name</th><th style="width:40px;text-align:center">Spare</th><th style="width:52px">Qty</th><th style="width:84px">Rent/Day</th></tr></thead>
+          <tbody>
+            <tr v-for="(r, i) in rows" :key="i">
+              <td class="idx">{{ i + 1 }}</td>
+              <td><input class="input" data-f="row.code" v-model="r.code" :disabled="locked" @input="onCode(i)"></td>
+              <td class="suggest-anchor">
+                <input class="input" data-f="row.name" v-model="r.name" :disabled="locked" @input="onName(i)" @keydown="nameKey(i, $event)" @blur="hideNameSug">
+                <div v-if="nameSug.row === i" class="suggest">
+                  <button v-for="(n, k) in nameSug.items" :key="n + k" :class="{ hi: k === nameSug.hi }" @mousedown.prevent="pickName(i, n)">{{ n }}</button>
+                </div>
+              </td>
+              <td style="text-align:center"><label class="check" style="justify-content:center"><input type="checkbox" data-f="row.spare" v-model="r.spare" :disabled="locked"></label></td>
+              <td><input class="input num" data-f="row.qty" v-model="r.qty" :disabled="locked" @input="onQty(i)"></td>
+              <td><input class="input num" data-f="row.rent" v-model="r.rent" :disabled="locked" @input="updateTotal"></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- summary -->
+        <div class="bf-grid c3">
+          <div class="field"><label>Date</label>
+            <div class="with-btn"><input class="input tnum" data-f="date" v-model="f.date" :disabled="locked" placeholder="dd-mm-yy">
+              <DatePicker icon-only small :model-value="f.date" :disabled="locked" @change="v => f.date = v"/></div></div>
+          <div class="field"><label>Time</label><input class="input tnum" data-f="time" v-model="f.time" :disabled="locked" placeholder="hh:mm AM"></div>
+          <div class="field"><label>Vehicle No.</label><input class="input" data-f="vehicle" v-model="f.vehicle" :disabled="locked"></div>
+          <div class="field"><label>Cashier Name<span class="req">*</span></label><input class="input" data-f="cashier_name" v-model="f.cashier_name" :disabled="locked"></div>
+          <div class="field"><label>Daily Rent</label><input class="input num" data-f="total" v-model="f.total" :disabled="locked" @input="calculateFormBalance"></div>
+          <div class="field"><label>Advance Paid</label><input class="input num" data-f="advance" v-model="f.advance" :disabled="locked" @input="calculateFormBalance"></div>
+        </div>
+        <div class="bf-grid c4">
+          <div class="field"><label>Advance Mode</label>
+            <Seg v-model="f.payment_mode" data-f="payment_mode" :disabled="locked" :options="[{value:'Cash',label:'Cash'},{value:'UPI',label:'UPI'}]"/></div>
+          <div class="balance-box" :class="f.pending === 'Yes' ? 'amber' : ''" title="Pending returns for this customer"><span class="bl">Pending</span><span class="bv" data-f="pending">{{ f.pending }}</span></div>
+          <div class="balance-box" :class="parseFloat(f.past_due) > 0 ? 'red' : ''"><span class="bl">Past Due</span><span class="bv" data-f="past_due">₹ {{ f.past_due }}</span></div>
+          <div class="balance-box" :class="parseFloat(f.balance) > 0 ? 'red' : (parseFloat(f.balance) < 0 ? '' : 'green')"><span class="bl">Balance</span><span class="bv" data-f="balance">₹ {{ f.balance }}</span></div>
+        </div>
+        <div class="action-bar six">
+          <button class="btn primary" @click="submit" title="Ctrl+S"><Icon name="save" size="sm"/>Submit</button>
+          <button class="btn" @click="clearForm" title="Ctrl+N"><Icon name="eraser" size="sm"/>Clear</button>
+          <button class="btn danger" @click="cancelRental"><Icon name="ban" size="sm"/>Cancel</button>
+          <button class="btn" @click="printBill('Estimate-Bill.png')"><Icon name="file" size="sm"/>Estimate</button>
+          <button class="btn" @click="printBill('Tax-Invoice.png')"><Icon name="receipt" size="sm"/>Tax Inv.</button>
+          <button class="btn" @click="backup" title="Upload to the cloud now (Ctrl+B)"><Icon name="cloud" size="sm"/>Sync</button>
         </div>
       </div>
     </div>
 
     <!-- ================= RIGHT: records + returns ================= -->
-    <div class="billing-right" style="overflow-y:auto;padding-bottom:2px">
-      <div class="card" style="display:flex;flex-direction:column;min-height:340px;flex:1 0 340px">
-        <div class="card-head" style="gap:10px">
-          <Search v-model="filt.search" placeholder="Search name, phone, address, bill" width="100%" style="flex:1;min-width:180px"/>
+    <div class="billing-right">
+      <div class="card bills-card">
+        <div class="bills-bar">
+          <Search v-model="filt.search" placeholder="Search name, phone, address, bill" width="100%" style="flex:1;min-width:170px"/>
           <Seg v-model="filt.status" :options="[{value:'all',label:'All'},{value:'pending',label:'Pending Returns'},{value:'balance',label:'Balance Due'}]"/>
-          <button class="btn" @click="printList" title="Print List"><Icon name="printer" size="sm"/>Print</button>
+          <button class="btn sm" @click="printList" title="Print List"><Icon name="printer" size="sm"/>Print</button>
+          <button class="btn sm icon-only bills-refresh" @click="reloadAll" title="Refresh all data (F5)"><Icon name="refresh" size="sm"/></button>
         </div>
-        <div class="toolbar" style="padding:9px 16px;border-bottom:1px solid var(--border);flex-wrap:nowrap;overflow-x:auto">
+        <div class="bills-bar filters">
           <span class="tb-label">Date</span>
           <DatePicker v-model="filt.from_date" placeholder="From" clearable small/>
           <DatePicker v-model="filt.to_date" placeholder="To" clearable small/>
           <span class="divider"></span>
           <span class="tb-label" style="white-space:nowrap">Bill No</span>
-          <input class="input tnum" style="width:84px;height:28px;flex:none" v-model="filt.from_bill" placeholder="From">
-          <input class="input tnum" style="width:84px;height:28px;flex:none" v-model="filt.to_bill" placeholder="To">
+          <input class="input tnum" style="width:84px;flex:none" v-model="filt.from_bill" placeholder="From">
+          <input class="input tnum" style="width:84px;flex:none" v-model="filt.to_bill" placeholder="To">
           <span class="grow"></span>
-          <button class="btn ghost sm" @click="clearFilters"><Icon name="x" size="sm"/>Clear Filters</button>
+          <button class="btn ghost sm" @click="clearFilters"><Icon name="x" size="sm"/>Clear</button>
         </div>
         <DataTable :columns="columns" :rows="tableRows" :row-key="r => r.values[0]" :selected-key="selectedBill" selectable min-width="920px"
                    @select="selectRow" empty-text="No bills match these filters.">
