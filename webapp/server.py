@@ -411,6 +411,7 @@ WRITES = {"submit_form", "cancel_record", "return_submit", "return_add_payment",
 
 def create_app():
     app = Flask(__name__, static_folder=None)
+    app.json.sort_keys = False      # keep dict order (e.g. main branch first)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
     @app.get("/")

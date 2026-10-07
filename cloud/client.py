@@ -1,6 +1,7 @@
 # cloud/client.py - minimal Supabase REST client (auth, tables, storage, rpc).
 # Uses only the standard library so it bundles cleanly into the .exe.
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -21,6 +22,32 @@ class AuthError(CloudError):
     pass
 
 
+def _send_urllib(method, url, headers, data, timeout):
+    """Desktop transport. Returns (status, body bytes, content type)."""
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read(), resp.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), e.headers.get("Content-Type", "") if e.headers else ""
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+        raise CloudError(f"No internet connection ({e})", offline=True)
+
+
+def _send_browser(method, url, headers, data, timeout):
+    """Browser (Pyodide) transport: a synchronous request made by the page's JS (pyHttp)."""
+    from js import pyHttp
+    from pyodide.ffi import to_js
+    res = pyHttp(method, url, json.dumps(headers), to_js(data) if data is not None else None)
+    error = getattr(res, "error", None)
+    if error:
+        raise CloudError(f"No internet connection ({error})", offline=True)
+    return int(res.status), str(res.text).encode("utf-8"), str(getattr(res, "ctype", "") or "")
+
+
+_send = _send_browser if sys.platform == "emscripten" else _send_urllib
+
+
 def _request(method, path, body=None, token=None, headers=None, raw=None, content_type="application/json", timeout=30):
     url = config.SUPABASE_URL + path
     h = {"apikey": config.SUPABASE_KEY}
@@ -31,25 +58,19 @@ def _request(method, path, body=None, token=None, headers=None, raw=None, conten
     if headers:
         h.update(headers)
     data = raw if raw is not None else (json.dumps(body).encode("utf-8") if body is not None else None)
-    req = urllib.request.Request(url, data=data, headers=h, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            text = resp.read()
-            if not text:
-                return None
-            ctype = resp.headers.get("Content-Type", "")
-            return json.loads(text) if "json" in ctype else text
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")
+    status, text, ctype = _send(method, url, h, data, timeout)
+    if status >= 400:
+        detail = text.decode("utf-8", "replace")
         try:
             j = json.loads(detail)
             detail = j.get("msg") or j.get("message") or j.get("error_description") or j.get("error") or detail
         except Exception:
             pass
-        cls = AuthError if e.code in (400, 401, 403) and path.startswith("/auth/") else CloudError
-        raise cls(f"{detail}", status=e.code)
-    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
-        raise CloudError(f"No internet connection ({e})", offline=True)
+        cls = AuthError if status in (400, 401, 403) and path.startswith("/auth/") else CloudError
+        raise cls(f"{detail}", status=status)
+    if not text:
+        return None
+    return json.loads(text) if "json" in ctype else text
 
 
 class Session:

@@ -43,6 +43,27 @@ def get_branch_code(cur) -> str:
         return ""  # sync not set up: single-shop numbering exactly as before
 
 
+def get_bill_series(cur) -> str:
+    """'M' on the phone/web app (its own series), '' on branch PCs."""
+    try:
+        cur.execute("SELECT value FROM sync_meta WHERE key = 'bill_series'")
+        row = cur.fetchone()
+        return str(row[0]).strip().upper() if row and row[0] else ""
+    except Exception:
+        return ""
+
+
+def _next_mobile_bill_no(cur, branch: str) -> str:
+    """Next phone/web bill for a branch: VDV-M0001, VDV-M0002, ..."""
+    cur.execute("SELECT bill_no FROM rentals WHERE bill_no LIKE ?", (f"{branch}-{MOBILE_SERIES}%",))
+    best = 0
+    for (raw,) in cur.fetchall():
+        match = re.match(rf"^{branch}-{MOBILE_SERIES}(\d{{4,}})$", str(raw).strip().upper())
+        if match:
+            best = max(best, int(match.group(1)))
+    return f"{branch}-{MOBILE_SERIES}{best + 1:04d}"
+
+
 def _next_branch_bill_no(cur, branch: str) -> str:
     """Next PC bill number for a branch, e.g. 'VDV-A3003'.
 
@@ -89,6 +110,8 @@ def generate_next_bill_no(db) -> str:
         # Multi-branch mode (cloud sync set up on this PC): "VDV-A3003" style numbers
         branch = get_branch_code(cur)
         if branch:
+            if get_bill_series(cur) == MOBILE_SERIES:
+                return _next_mobile_bill_no(cur, branch)
             return _next_branch_bill_no(cur, branch)
 
         # Get the latest bill number with proper error handling

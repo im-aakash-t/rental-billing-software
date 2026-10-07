@@ -578,7 +578,7 @@ const TeamPage = {
       { key: "branch_id", label: "Branch", width: "200px", get: (u) => data.branches[u.branch_id] ? `${data.branches[u.branch_id]} (${u.branch_id})` : "— not assigned —" },
       { key: "role", label: "Role", width: "120px", align: "c" },
       { key: "active", label: "Status", width: "120px", align: "c" },
-      { key: "actions", label: "", width: "230px", align: "r", title: false },
+      { key: "actions", label: "", width: "270px", align: "r", title: false },
     ];
     return { data, load, branchCards, addLogin, editLogin, resetPassword, columns };
   },

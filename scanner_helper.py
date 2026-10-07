@@ -3,6 +3,18 @@ import os
 import win32com.client
 from tkinter import messagebox
 
+def id_photo_filename(bill_no, name, id_type):
+    """<bill>_<name>_<type>.jpg with characters that break file names removed
+    (/ \\ : * ? " < > |). Shared by the scanner and the phone camera upload."""
+    safe_bill = "".join([c for c in str(bill_no) if c.isalnum() or c in "-_ "]).strip()
+    safe_name = "".join([c for c in str(name) if c.isalnum() or c in "-_ "]).strip()
+    safe_type = "".join([c for c in str(id_type) if c.isalnum() or c in "-_ "]).strip()
+
+    if not safe_bill: safe_bill = "PendingBill"
+    if not safe_name: safe_name = "UnknownCustomer"
+    if not safe_type: safe_type = "ID"
+    return f"{safe_bill}_{safe_name}_{safe_type}.jpg"
+
 def scan_id_image(bill_no, name, id_type):
     """
     Connects to the Windows Scanner, scans the document,
@@ -21,17 +33,8 @@ def scan_id_image(bill_no, name, id_type):
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    # 2. Clean the inputs (Filenames crash if they have characters like / \ : * ? " < > |)
-    safe_bill = "".join([c for c in str(bill_no) if c.isalnum() or c in "-_ "]).strip()
-    safe_name = "".join([c for c in str(name) if c.isalnum() or c in "-_ "]).strip()
-    safe_type = "".join([c for c in str(id_type) if c.isalnum() or c in "-_ "]).strip()
-
-    if not safe_bill: safe_bill = "PendingBill"
-    if not safe_name: safe_name = "UnknownCustomer"
-    if not safe_type: safe_type = "ID"
-
-    # 3. Create the exact filename your Uncle wanted!
-    filename = f"{safe_bill}_{safe_name}_{safe_type}.jpg"
+    # 2-3. Clean the inputs and create the exact filename your Uncle wanted!
+    filename = id_photo_filename(bill_no, name, id_type)
     save_path = os.path.abspath(os.path.join(save_dir, filename))
 
     # 4. WIA throws an error if a file with the same name already exists, so we delete the old one
